@@ -32,6 +32,19 @@ type Manager struct {
 	callback    func(name string, client *Client)
 	now         func() time.Time
 	lookPath    func(string) (string, error)
+
+	// Health monitoring. The monitor in health.go probes every client
+	// on a timer and restarts the (workspace, server) pairs that keep
+	// failing. healthMu guards the lazy creation of health so a Manager
+	// built without NewManager still works.
+	monitorOnce sync.Once
+	healthMu    sync.Mutex
+	health      *csync.Map[string, *clientHealth]
+	healthOpts  healthOptions
+
+	// Test seams for the health monitor.
+	probeFn   func(context.Context, *Client) error
+	restartFn func(*Client) error
 }
 
 // NewManager creates a new LSP manager service.

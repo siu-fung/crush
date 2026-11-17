@@ -36,6 +36,8 @@ import (
 //	option max-background-jobs 200
 //	option pinentry-integrated false
 //	option pinentry-cache-timeout 300
+//	option system-prompt "Always answer in Spanish."
+//	option system-prompt-file ~/.config/crush/system_prompt.md
 //
 // Boolean shortcuts: for boolean fields, omitting the value sets it to true.
 func handleOption(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
@@ -210,14 +212,17 @@ var optionSpecs = map[string]optionSpec{
 	"default-providers":    {jsonKey: "disable_default_providers", kind: optBool, inverted: true},
 
 	// String fields.
-	"notifications":  {jsonKey: "notifications", kind: optString},
-	"data-directory": {jsonKey: "data_directory", kind: optString},
-	"initialize-as":  {jsonKey: "initialize_as", kind: optString},
+	"notifications":      {jsonKey: "notifications", kind: optString},
+	"data-directory":     {jsonKey: "data_directory", kind: optString},
+	"initialize-as":      {jsonKey: "initialize_as", kind: optString},
+	"system-prompt":      {jsonKey: "system_prompt", kind: optString},
+	"system-prompt-file": {jsonKey: "system_prompt_file", kind: optString},
 
 	// Integer fields.
-	"request-timeout":        {jsonKey: "request_timeout", kind: optInt},
-	"max-background-jobs":    {jsonKey: "max_background_jobs", kind: optInt},
-	"pinentry-cache-timeout": {jsonKey: "pinentry_cache_timeout", kind: optInt},
+	"request-timeout":         {jsonKey: "request_timeout", kind: optInt},
+	"max-background-jobs":     {jsonKey: "max_background_jobs", kind: optInt},
+	"hook-continuation-limit": {jsonKey: "hook_continuation_limit", kind: optInt},
+	"pinentry-cache-timeout":  {jsonKey: "pinentry_cache_timeout", kind: optInt},
 
 	// List fields. Keys are singular because each call appends one value.
 	"context-path":        {jsonKey: "context_paths", kind: optList},

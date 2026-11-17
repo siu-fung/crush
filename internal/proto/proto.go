@@ -190,6 +190,42 @@ type SessionNote struct {
 	Text string `json:"text"`
 }
 
+// RewindRequest names the message a session transcript should be truncated
+// at: that message and everything after it is deleted.
+type RewindRequest struct {
+	MessageID string `json:"message_id"`
+}
+
+// RemoveQueuedPromptRequest names the queued prompt to drop. Index is its
+// position in the queue as the caller last saw it; Prompt is the text it
+// expects there. The agent uses the text to tell a stale index (the queue
+// drained a head entry in the meantime) from a live one, so a dismissal can
+// never remove the wrong prompt.
+type RemoveQueuedPromptRequest struct {
+	Index  int    `json:"index"`
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// BackgroundJob is a shell the agent started in the background. It
+// mirrors the shell package's JobInfo so a frontend can render a job
+// panel without importing the shell implementation.
+type BackgroundJob struct {
+	ID          string `json:"id"`
+	Command     string `json:"command"`
+	Description string `json:"description"`
+	WorkingDir  string `json:"working_dir"`
+	Running     bool   `json:"running"`
+	ExitCode    int    `json:"exit_code"`
+	StartedAt   int64  `json:"started_at"`
+	CompletedAt int64  `json:"completed_at"`
+}
+
+// BackgroundJobOutput is a job snapshot plus the last lines it printed.
+type BackgroundJobOutput struct {
+	Job    BackgroundJob `json:"job"`
+	Output string        `json:"output"`
+}
+
 // ShellCommandRequest represents a request to run a shell command directly.
 type ShellCommandRequest struct {
 	SessionID string `json:"session_id"`

@@ -86,6 +86,13 @@ type KeyMap struct {
 	Tab        key.Binding
 	ToggleYolo key.Binding
 	ShiftTab   key.Binding
+	// Timeline opens the rewind picker. It shares ctrl+r with the
+	// attachment delete mode, which only wins while attachments exist.
+	Timeline key.Binding
+	// Queue opens the prompt queue panel.
+	Queue key.Binding
+	// Jobs opens the background tasks panel.
+	Jobs key.Binding
 }
 
 func DefaultKeyMap() KeyMap {
@@ -125,6 +132,18 @@ func DefaultKeyMap() KeyMap {
 		ShiftTab: key.NewBinding(
 			key.WithKeys("shift+tab"),
 			key.WithHelp("shift+tab", "mode"),
+		),
+		Timeline: key.NewBinding(
+			key.WithKeys("ctrl+r"),
+			key.WithHelp("ctrl+r", "rewind"),
+		),
+		Queue: key.NewBinding(
+			key.WithKeys("ctrl+t"),
+			key.WithHelp("ctrl+t", "queue"),
+		),
+		Jobs: key.NewBinding(
+			key.WithKeys("alt+j"),
+			key.WithHelp("alt+j", "tasks"),
 		),
 	}
 
@@ -215,8 +234,8 @@ func DefaultKeyMap() KeyMap {
 		key.WithHelp("ctrl+d", "toggle details"),
 	)
 	km.Chat.TogglePills = key.NewBinding(
-		key.WithKeys("ctrl+t", "ctrl+space"),
-		key.WithHelp("ctrl+t", "toggle tasks"),
+		key.WithKeys("ctrl+space"),
+		key.WithHelp("ctrl+space", "toggle tasks"),
 	)
 	km.Chat.ToggleSidebar = key.NewBinding(
 		key.WithKeys("ctrl+b"),

@@ -46,6 +46,9 @@ var (
 	// the meantime are lost for good, so the client treats it as a
 	// degraded link that requires a resync.
 	ErrStreamClosed = errors.New("the event stream closed; reconnecting")
+	// ErrSessionBusy means the requested operation needs an idle session
+	// and the agent still has work running or queued on it.
+	ErrSessionBusy = errors.New("the session is busy")
 )
 
 // ConnectionState describes the health of the client-server link as
@@ -121,6 +124,26 @@ type AgentModel struct {
 	ModelCfg   config.SelectedModel
 }
 
+// BackgroundJob is a shell running in the background, as a frontend sees
+// it. The fields mirror the shell package's JobInfo so the UI does not
+// depend on the executor's internals.
+type BackgroundJob struct {
+	ID          string
+	Command     string
+	Description string
+	WorkingDir  string
+	Running     bool
+	ExitCode    int
+	StartedAt   int64
+	CompletedAt int64
+}
+
+// BackgroundJobOutput is a job snapshot plus the last lines it printed.
+type BackgroundJobOutput struct {
+	Job    BackgroundJob
+	Output string
+}
+
 // Workspace is the main abstraction consumed by the TUI and CLI. It
 // groups every operation a frontend needs to perform against a running
 // workspace, regardless of whether the workspace is in-process or
@@ -132,6 +155,12 @@ type Workspace interface {
 	ListSessions(ctx context.Context) ([]session.Session, error)
 	SaveSession(ctx context.Context, sess session.Session) (session.Session, error)
 	DeleteSession(ctx context.Context, sessionID string) error
+	// RewindSession truncates the transcript at messageID: that message and
+	// every message after it are removed. The caller restores the prompt
+	// itself, so nothing is left behind to duplicate it. It returns how
+	// many messages were removed and fails with ErrSessionBusy while the
+	// agent still has work on the session.
+	RewindSession(ctx context.Context, sessionID, messageID string) (int, error)
 	CreateAgentToolSessionID(messageID, toolCallID string) string
 	ParseAgentToolSessionID(sessionID string) (messageID string, toolCallID string, ok bool)
 	// SetCurrentSession reports the session this client is currently
@@ -174,6 +203,27 @@ type Workspace interface {
 	AgentQueuedPrompts(sessionID string) int
 	AgentQueuedPromptsList(sessionID string) []string
 	AgentClearQueue(sessionID string)
+	// AgentRemoveQueuedPrompt drops the queued prompt at index, reporting
+	// whether an entry was removed. prompt is the text the caller expects
+	// at that index; the agent uses it to detect a queue that drained a
+	// head entry since the caller snapshotted it, so a stale index cannot
+	// remove the wrong prompt. The remaining prompts keep their order and
+	// still run after the current turn.
+	AgentRemoveQueuedPrompt(sessionID string, index int, prompt string) bool
+
+	// BackgroundJobs
+	//
+	// Background jobs are shells the agent (or the user, through its
+	// tools) started and left running. In client/server mode they live
+	// in the server process, so the frontend reads them through these
+	// calls rather than touching the shell manager directly.
+	ListBackgroundJobs(ctx context.Context) ([]BackgroundJob, error)
+	// BackgroundJobOutput returns a job's status along with the last
+	// lines it printed (bounded, so polling stays cheap).
+	BackgroundJobOutput(ctx context.Context, jobID string) (BackgroundJobOutput, error)
+	// KillBackgroundJob terminates a job and the process group it
+	// spawned.
+	KillBackgroundJob(ctx context.Context, jobID string) error
 	AgentSetMain(agentID string) error
 	AgentSummarize(ctx context.Context, sessionID string) error
 	UpdateAgentModel(ctx context.Context) error

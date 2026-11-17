@@ -454,9 +454,17 @@ func (Attribution) JSONSchemaExtend(schema *jsonschema.Schema) {
 }
 
 type Options struct {
-	ContextPaths         []string    `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`
-	GlobalContextPaths   []string    `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
-	SkillsPaths          []string    `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
+	ContextPaths       []string `json:"context_paths,omitempty" jsonschema:"description=Paths to files containing context information for the AI,example=.cursorrules,example=CRUSH.md"`
+	GlobalContextPaths []string `json:"global_context_paths,omitempty" jsonschema:"description=Paths to files containing global context information for the AI,default=~/.config/crush/CRUSH.md,default=~/.config/AGENTS.md"`
+	SkillsPaths        []string `json:"skills_paths,omitempty" jsonschema:"description=Paths to directories containing Agent Skills (folders with SKILL.md files),example=~/.config/crush/skills,example=./skills"`
+	// SystemPrompt appends custom instructions to every agent's system
+	// prompt. The built-in instructions and tool documentation stay in
+	// place; the text is rendered in its own section at the end.
+	SystemPrompt string `json:"system_prompt,omitempty" jsonschema:"description=Custom instructions appended to every agent's system prompt. The built-in instructions stay in effect.,example=Always answer in Spanish."`
+	// SystemPromptFile is a path to a file whose contents are appended
+	// to every agent's system prompt. When both are set, the file's
+	// contents follow the inline text.
+	SystemPromptFile     string      `json:"system_prompt_file,omitempty" jsonschema:"description=Path to a file whose contents are appended to every agent's system prompt. Supports ~ and environment variables; relative paths resolve against the working directory.,example=~/.config/crush/system_prompt.md"`
 	TUI                  *TUIOptions `json:"tui,omitempty" jsonschema:"description=Terminal user interface options"`
 	Debug                bool        `json:"debug,omitempty" jsonschema:"description=Enable debug logging,default=false"`
 	DebugLSP             bool        `json:"debug_lsp,omitempty" jsonschema:"description=Enable debug logging for LSP servers,default=false"`
@@ -478,6 +486,7 @@ type Options struct {
 	DisabledSkills            []string     `json:"disabled_skills,omitempty" jsonschema:"description=List of skill names to disable and hide from the agent,example=crush-config"`
 	RequestTimeout            *int         `json:"request_timeout,omitempty" jsonschema:"description=Timeout in seconds for each LLM API request. Streaming responses are aborted only after this much inactivity between tokens\\, so slow but active streams are never killed; the wait for the first token gets at least five minutes for prompt prefill. 0 disables it\\, negative values are invalid.,default=60,example=120,example=300,example=0"`
 	MaxBackgroundJobs         *int         `json:"max_background_jobs,omitempty" jsonschema:"description=How many background shell jobs may run at once. Jobs that have finished never count against it. 0 or negative restores the default.,default=50,example=10,example=200"`
+	HookContinuationLimit     *int         `json:"hook_continuation_limit,omitempty" jsonschema:"description=How many times hooks may keep a single turn going by marking their output as a continuation. Once the budget is spent the hook output is replaced with an instruction to stop retrying. 0 or negative restores the default.,default=5,example=3"`
 	// PinentryIntegrated renders GPG passphrase/PIN prompts as a native
 	// Crush dialog (loopback pinentry) instead of handing the terminal
 	// over to an external pinentry program. No GPG or git configuration
@@ -496,6 +505,22 @@ func (o *Options) GetMaxBackgroundJobs() int {
 		return DefaultMaxBackgroundJobs
 	}
 	return *o.MaxBackgroundJobs
+}
+
+// DefaultHookContinuationLimit is how many times hooks may keep one turn
+// going when the user has not set hook_continuation_limit. Five attempts
+// is enough for a fix-and-retry loop without letting a failing command
+// run forever.
+const DefaultHookContinuationLimit = 5
+
+// GetHookContinuationLimit returns the per-turn continuation budget,
+// always positive. A continuation is hook output that asks the model to
+// keep working in the same turn (see the hooks "continuation" field).
+func (o *Options) GetHookContinuationLimit() int {
+	if o == nil || o.HookContinuationLimit == nil || *o.HookContinuationLimit <= 0 {
+		return DefaultHookContinuationLimit
+	}
+	return *o.HookContinuationLimit
 }
 
 // DefaultRequestTimeout bounds each LLM API request when the user has not

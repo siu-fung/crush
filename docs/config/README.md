@@ -495,6 +495,10 @@ String Keys:
   initialize-as string             context filename created by crush init
   notifications string             notification style: auto, native, osc, bell,
                                    or disabled
+  system-prompt string             instructions appended to every agent's
+                                   system prompt
+  system-prompt-file string        file whose contents are appended to every
+                                   agent's system prompt
   attribution-trailer-style string attribution trailer: none, co-authored-by,
                                    or assisted-by
 
@@ -523,8 +527,17 @@ List Keys:
 ```bash
 option progress false
 option skill-path ./skills
+option system-prompt "Always answer in Spanish."
+option system-prompt-file ~/.config/crush/system_prompt.md
 option attribution-trailer-style assisted-by
 ```
+
+The custom system prompt is appended to the built-in prompt every agent
+receives (coder, plan, and task subagents) as a `<custom_instructions>`
+section, so the built-in rules and tool documentation stay in effect. The
+same fields work in `crush.json` as `options.system_prompt` and
+`options.system_prompt_file`. Relative file paths resolve against the
+working directory, and `~` plus environment variables expand.
 
 #### `option reset`
 

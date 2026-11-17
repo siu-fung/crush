@@ -59,6 +59,13 @@ type Service interface {
 	Delete(ctx context.Context, id string) error
 	DeleteSessionMessages(ctx context.Context, sessionID string) error
 
+	// TruncateFrom deletes messageID and every message that follows it in
+	// the session transcript, returning how many messages were removed.
+	// It is the primitive behind a timeline rewind: the caller already
+	// holds the prompt text, so keeping the anchor would leave a duplicate
+	// once the user resends it.
+	TruncateFrom(ctx context.Context, sessionID, messageID string) (int, error)
+
 	// Flush synchronously drains any pending debounced state for the
 	// given message ID, performs the SQL write, and publishes the
 	// resulting [pubsub.UpdatedEvent]. Idempotent; cheap no-op if no
@@ -196,6 +203,39 @@ func (s *service) Delete(ctx context.Context, id string) error {
 	// concurrent modifications to the Parts slice.
 	s.Publish(pubsub.DeletedEvent, message.Clone())
 	return nil
+}
+
+// TruncateFrom deletes messageID and every message that follows it in the
+// session's transcript. It returns how many messages were removed.
+//
+// Pending debounced writes are flushed first: a late flush would otherwise
+// write back state for a row that has just been dropped.
+func (s *service) TruncateFrom(ctx context.Context, sessionID, messageID string) (int, error) {
+	if err := s.FlushAll(ctx); err != nil {
+		return 0, err
+	}
+	messages, err := s.List(ctx, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	anchor := -1
+	for i, msg := range messages {
+		if msg.ID == messageID {
+			anchor = i
+			break
+		}
+	}
+	if anchor < 0 {
+		return 0, fmt.Errorf("message %q not found in session %q", messageID, sessionID)
+	}
+	deleted := 0
+	for _, msg := range messages[anchor:] {
+		if err := s.Delete(ctx, msg.ID); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 func (s *service) Create(ctx context.Context, sessionID string, params CreateMessageParams) (Message, error) {

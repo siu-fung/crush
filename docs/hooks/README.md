@@ -454,6 +454,7 @@ the input, or still deny/halt with a reason:
   "halt": false, // If true, halts the turn entirely.
   "reason": "LGTM", // Shown when denying or halting.
   "context": "Scrubbed secrets", // String or array of strings. Appended to what the model sees.
+  "continuation": false, // If true, context consumes the turn's continuation budget.
   "updated_input": { "command": "…" }, // Shallow-merged into the tool's input before execution.
 }
 ```
@@ -484,6 +485,17 @@ reason.
 for a single observation; use the array form when a hook produces multiple
 distinct notes and you'd rather not concatenate them by hand. Empty strings and
 empty array entries are dropped.
+
+`continuation: true` marks that context as "keep going": the hook is nudging the
+model to fix something and carry on in the same turn (a failed test run, a
+build error) rather than leaving it a note. Crush caps how many continuations a
+single turn may receive, so a hook cannot turn one broken command into an
+endless retry loop. The budget is `options.hook_continuation_limit` (5 by
+default; 0 or negative restores the default). Past the budget the hook's
+`context` is replaced with an instruction to stop retrying and hand back to the
+user. Context without `continuation` is never capped, and continuations on
+events without a tool call are ignored, since they never reach the model.
+The budget resets on every `TurnStart`.
 
 Here's a full shell script that produces this JSON:
 
@@ -612,6 +624,48 @@ if [[ "$CRUSH_TOOL_INPUT_FILE_PATH" == *.go ]]; then
 else
   echo '{}'
 fi
+```
+
+### Keep fixing a command that fails
+
+Nudge the model to diagnose and repair a failed command instead of stopping.
+The bash tool reports a non-zero exit as a successful call whose output ends
+with an `Exit code N` line, so this belongs on `PostToolUse`, not
+`PostToolUseFailure`.
+
+```bash
+hook add PostToolUse \
+  --matcher '^bash$' \
+  --command "./hooks/bash-failure-continue.sh"
+```
+
+`hooks/bash-failure-continue.sh` (also checked into this repo, where
+`crush.json` wires it up with `hook_continuation_limit` set to 5):
+
+```bash
+#!/usr/bin/env bash
+# Tell the model to fix the failed command. `continuation: true` makes
+# Crush count it against options.hook_continuation_limit, so five failed
+# attempts in one turn are followed by "stop retrying" instead of a loop.
+input=$(cat)
+response=$(printf '%s' "$input" | jq -r '.tool_response // empty')
+
+if printf '%s' "$response" | grep -qE '^Exit code [1-9][0-9]*$'; then
+  jq -nc '{"context":"The last command failed. Diagnose the error and fix it, for at most 5 attempts.","continuation":true}'
+fi
+```
+
+With the JSON config form:
+
+```jsonc
+{
+  "options": { "hook_continuation_limit": 5 },
+  "hooks": {
+    "PostToolUse": [
+      { "matcher": "^bash$", "command": "./hooks/bash-failure-continue.sh" },
+    ],
+  },
+}
 ```
 
 ### Block all MCP tools
@@ -878,6 +932,11 @@ event:
   // string | string[]. Appended to what the model sees. Empty entries are
   // dropped.
   "context": "Rewrote with RTK",
+
+  // boolean. Marks the context above as a continuation: output that keeps
+  // the model working in this turn. Each one spends a unit of
+  // options.hook_continuation_limit. Ignored on events without a tool call.
+  "continuation": false,
 }
 ```
 

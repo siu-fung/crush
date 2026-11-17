@@ -67,6 +67,17 @@ func (w *AppWorkspace) DeleteSession(ctx context.Context, sessionID string) erro
 	return w.app.Sessions.Delete(ctx, sessionID)
 }
 
+// RewindSession truncates the transcript at messageID: the message and
+// everything after it are removed. It refuses to run while the agent still
+// has work on the session: the live turn would keep appending messages the
+// rewind just removed.
+func (w *AppWorkspace) RewindSession(ctx context.Context, sessionID, messageID string) (int, error) {
+	if w.app.AgentCoordinator != nil && w.app.AgentCoordinator.IsSessionBusy(sessionID) {
+		return 0, ErrSessionBusy
+	}
+	return w.app.Messages.TruncateFrom(ctx, sessionID, messageID)
+}
+
 func (w *AppWorkspace) CreateAgentToolSessionID(messageID, toolCallID string) string {
 	return w.app.Sessions.CreateAgentToolSessionID(messageID, toolCallID)
 }
@@ -231,6 +242,52 @@ func (w *AppWorkspace) AgentQueuedPromptsList(sessionID string) []string {
 func (w *AppWorkspace) AgentClearQueue(sessionID string) {
 	if w.app.AgentCoordinator != nil {
 		w.app.AgentCoordinator.ClearQueue(sessionID)
+	}
+}
+
+func (w *AppWorkspace) AgentRemoveQueuedPrompt(sessionID string, index int, prompt string) bool {
+	if w.app.AgentCoordinator == nil {
+		return false
+	}
+	return w.app.AgentCoordinator.RemoveQueuedPrompt(sessionID, index, prompt)
+}
+
+func (w *AppWorkspace) ListBackgroundJobs(context.Context) ([]BackgroundJob, error) {
+	infos := shell.GetBackgroundShellManager().Infos()
+	jobs := make([]BackgroundJob, len(infos))
+	for i, info := range infos {
+		jobs[i] = backgroundJobFromShell(info)
+	}
+	return jobs, nil
+}
+
+func (w *AppWorkspace) BackgroundJobOutput(_ context.Context, jobID string) (BackgroundJobOutput, error) {
+	info, output, err := shell.GetBackgroundShellManager().Output(jobID)
+	if err != nil {
+		return BackgroundJobOutput{}, err
+	}
+	return BackgroundJobOutput{
+		Job:    backgroundJobFromShell(info),
+		Output: output,
+	}, nil
+}
+
+func (w *AppWorkspace) KillBackgroundJob(_ context.Context, jobID string) error {
+	return shell.GetBackgroundShellManager().Kill(jobID)
+}
+
+// backgroundJobFromShell converts the executor's snapshot into the shape
+// frontends consume.
+func backgroundJobFromShell(info shell.JobInfo) BackgroundJob {
+	return BackgroundJob{
+		ID:          info.ID,
+		Command:     info.Command,
+		Description: info.Description,
+		WorkingDir:  info.WorkingDir,
+		Running:     info.Running,
+		ExitCode:    info.ExitCode,
+		StartedAt:   info.StartedAt,
+		CompletedAt: info.CompletedAt,
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/ui/dialog"
 	"github.com/charmbracelet/crush/internal/workspace"
 )
 
@@ -322,6 +323,13 @@ func (m *UI) applyPromptQueue(msg promptQueueMsg) []tea.Cmd {
 		m.updateLayoutAndSize()
 	} else if itemsChanged {
 		m.renderPills()
+	}
+	// Keep an open queue panel in step with the authoritative list; the
+	// panel edits its own copy between refreshes.
+	if dia := m.dialog.Dialog(dialog.QueueID); dia != nil {
+		if queue, ok := dia.(*dialog.Queue); ok && (countChanged || itemsChanged) {
+			queue.SetEntries(m.queueEntries())
+		}
 	}
 	return nil
 }

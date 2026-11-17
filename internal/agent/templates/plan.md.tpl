@@ -53,4 +53,10 @@ These rules override everything else. Follow them strictly:
 - When the change touches user-facing behavior, describe the intended user flow, interaction states, and failure/empty states before listing implementation steps.
 - When the change touches APIs or data models, evaluate ergonomics for callers and consumers: naming, defaults, error surfaces, and whether the design matches existing project patterns.
 - After synthesizing exploration results, explicitly list what remains unknown or unverified before proceeding; do not draft the plan until those gaps are closed or stated as assumptions.
-</style>
+</style>{{if .CustomPrompt}}
+
+<custom_instructions>
+The user configured the following instructions for every session. Follow them in addition to the rules above; they take precedence over the style guidance where the two differ.
+{{.CustomPrompt}}
+</custom_instructions>
+{{end}}

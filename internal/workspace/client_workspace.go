@@ -175,6 +175,16 @@ func (w *ClientWorkspace) DeleteSession(ctx context.Context, sessionID string) e
 	return w.client.DeleteSession(ctx, w.workspaceID(), sessionID)
 }
 
+func (w *ClientWorkspace) RewindSession(ctx context.Context, sessionID, messageID string) (int, error) {
+	removed, err := w.client.RewindSession(ctx, w.workspaceID(), sessionID, messageID)
+	if errors.Is(err, client.ErrSessionBusy) {
+		// Report the same outcome the in-process workspace does, so the
+		// caller has one error to match against.
+		return 0, ErrSessionBusy
+	}
+	return removed, err
+}
+
 func (w *ClientWorkspace) CreateAgentToolSessionID(messageID, toolCallID string) string {
 	return fmt.Sprintf("%s$$%s", messageID, toolCallID)
 }
@@ -325,6 +335,55 @@ func (w *ClientWorkspace) AgentQueuedPromptsList(sessionID string) []string {
 
 func (w *ClientWorkspace) AgentClearQueue(sessionID string) {
 	_ = w.client.ClearAgentSessionQueuedPrompts(context.Background(), w.workspaceID(), sessionID)
+}
+
+func (w *ClientWorkspace) AgentRemoveQueuedPrompt(sessionID string, index int, prompt string) bool {
+	removed, err := w.client.RemoveAgentSessionQueuedPrompt(context.Background(), w.workspaceID(), sessionID, index, prompt)
+	if err != nil {
+		return false
+	}
+	return removed
+}
+
+func (w *ClientWorkspace) ListBackgroundJobs(ctx context.Context) ([]BackgroundJob, error) {
+	jobs, err := w.client.ListBackgroundJobs(ctx, w.workspaceID())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]BackgroundJob, len(jobs))
+	for i, job := range jobs {
+		out[i] = backgroundJobFromProto(job)
+	}
+	return out, nil
+}
+
+func (w *ClientWorkspace) BackgroundJobOutput(ctx context.Context, jobID string) (BackgroundJobOutput, error) {
+	out, err := w.client.BackgroundJobOutput(ctx, w.workspaceID(), jobID)
+	if err != nil {
+		return BackgroundJobOutput{}, err
+	}
+	return BackgroundJobOutput{
+		Job:    backgroundJobFromProto(out.Job),
+		Output: out.Output,
+	}, nil
+}
+
+func (w *ClientWorkspace) KillBackgroundJob(ctx context.Context, jobID string) error {
+	return w.client.KillBackgroundJob(ctx, w.workspaceID(), jobID)
+}
+
+// backgroundJobFromProto converts the wire shape into the frontend's shape.
+func backgroundJobFromProto(job proto.BackgroundJob) BackgroundJob {
+	return BackgroundJob{
+		ID:          job.ID,
+		Command:     job.Command,
+		Description: job.Description,
+		WorkingDir:  job.WorkingDir,
+		Running:     job.Running,
+		ExitCode:    job.ExitCode,
+		StartedAt:   job.StartedAt,
+		CompletedAt: job.CompletedAt,
+	}
 }
 
 func (w *ClientWorkspace) AgentSetMain(agentID string) error {

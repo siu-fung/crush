@@ -3,6 +3,7 @@ package shellconfig
 import (
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -65,6 +66,32 @@ option notifications osc`
 	opts := result["options"].(map[string]any)
 	require.Equal(t, ".crush", opts["data_directory"])
 	require.Equal(t, "osc", opts["notifications"])
+}
+
+func TestOption_SystemPrompt(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	script := `option system-prompt "Always answer in Spanish."
+option system-prompt-file ~/.config/crush/system_prompt.md`
+	path := filepath.Join(dir, "crushrc")
+
+	jsonBytes, err := LoadShellConfig(t.Context(), path, []byte(script))
+	require.NoError(t, err)
+
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(jsonBytes, &result))
+
+	opts := result["options"].(map[string]any)
+	require.Equal(t, "Always answer in Spanish.", opts["system_prompt"])
+
+	// The shell config loader expands ~ in option values, which is
+	// exactly what makes system-prompt-file usable with a home-relative
+	// path.
+	file, ok := opts["system_prompt_file"].(string)
+	require.True(t, ok)
+	require.True(t, filepath.IsAbs(file), "expected ~ expansion, got %q", file)
+	require.True(t, strings.HasSuffix(file, filepath.Join(".config", "crush", "system_prompt.md")))
 }
 
 func TestOption_List(t *testing.T) {

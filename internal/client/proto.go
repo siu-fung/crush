@@ -982,6 +982,91 @@ func (c *Client) DeleteSession(ctx context.Context, id string, sessionID string)
 	return nil
 }
 
+// RewindSession truncates a session transcript at messageID: that message
+// and everything after it are removed. It returns how many messages were
+// removed.
+func (c *Client) RewindSession(ctx context.Context, id, sessionID, messageID string) (int, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/sessions/%s/rewind", id, sessionID), nil, jsonBody(proto.RewindRequest{MessageID: messageID}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return 0, fmt.Errorf("failed to rewind session: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return 0, fmt.Errorf("failed to rewind session: %w", err)
+	}
+	var removed int
+	if err := json.NewDecoder(rsp.Body).Decode(&removed); err != nil {
+		return 0, fmt.Errorf("failed to decode rewind result: %w", err)
+	}
+	return removed, nil
+}
+
+// RemoveAgentSessionQueuedPrompt drops the queued prompt at index, reporting
+// whether an entry was removed. prompt is the text the caller expects there,
+// so the agent can reject a stale index instead of removing the wrong entry.
+func (c *Client) RemoveAgentSessionQueuedPrompt(ctx context.Context, id string, sessionID string, index int, prompt string) (bool, error) {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/agent/sessions/%s/prompts/remove", id, sessionID), nil, jsonBody(proto.RemoveQueuedPromptRequest{Index: index, Prompt: prompt}), http.Header{"Content-Type": []string{"application/json"}})
+	if err != nil {
+		return false, fmt.Errorf("failed to remove queued prompt: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return false, fmt.Errorf("failed to remove queued prompt: %w", err)
+	}
+	var removed bool
+	if err := json.NewDecoder(rsp.Body).Decode(&removed); err != nil {
+		return false, fmt.Errorf("failed to decode queued prompt result: %w", err)
+	}
+	return removed, nil
+}
+
+// ListBackgroundJobs returns the background shells this process tracks.
+func (c *Client) ListBackgroundJobs(ctx context.Context, id string) ([]proto.BackgroundJob, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/jobs", id), nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list background jobs: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return nil, fmt.Errorf("failed to list background jobs: %w", err)
+	}
+	var jobs []proto.BackgroundJob
+	if err := json.NewDecoder(rsp.Body).Decode(&jobs); err != nil {
+		return nil, fmt.Errorf("failed to decode background jobs: %w", err)
+	}
+	return jobs, nil
+}
+
+// BackgroundJobOutput returns a job's status and retained output.
+func (c *Client) BackgroundJobOutput(ctx context.Context, id, jobID string) (proto.BackgroundJobOutput, error) {
+	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/jobs/%s/output", id, jobID), nil, nil)
+	if err != nil {
+		return proto.BackgroundJobOutput{}, fmt.Errorf("failed to get background job output: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return proto.BackgroundJobOutput{}, fmt.Errorf("failed to get background job output: %w", err)
+	}
+	var out proto.BackgroundJobOutput
+	if err := json.NewDecoder(rsp.Body).Decode(&out); err != nil {
+		return proto.BackgroundJobOutput{}, fmt.Errorf("failed to decode background job output: %w", err)
+	}
+	return out, nil
+}
+
+// KillBackgroundJob terminates a background job and its process group.
+func (c *Client) KillBackgroundJob(ctx context.Context, id, jobID string) error {
+	rsp, err := c.post(ctx, fmt.Sprintf("/workspaces/%s/jobs/%s/kill", id, jobID), nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("failed to kill background job: %w", err)
+	}
+	defer rsp.Body.Close()
+	if err := checkStatus(rsp); err != nil {
+		return fmt.Errorf("failed to kill background job: %w", err)
+	}
+	return nil
+}
+
 // ListUserMessages retrieves user-role messages for a session as proto types.
 func (c *Client) ListUserMessages(ctx context.Context, id string, sessionID string) ([]proto.Message, error) {
 	rsp, err := c.get(ctx, fmt.Sprintf("/workspaces/%s/sessions/%s/messages/user", id, sessionID), nil, nil)

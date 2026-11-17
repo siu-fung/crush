@@ -66,6 +66,11 @@ type Client struct {
 
 	// Server state
 	serverState atomic.Value
+
+	// Request-level health: how many requests in a row failed. The
+	// health monitor folds it into its verdict, so a server that answers
+	// the probe but fails real work is caught too.
+	health healthStats
 }
 
 // New creates a new LSP client using the powernap implementation.
@@ -701,7 +706,9 @@ func (c *Client) FindReferences(ctx context.Context, filepath string, line, char
 
 	// NOTE: line and character should be 0-based.
 	// See: https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#position
-	return c.client.FindReferences(ctx, filepath, line-1, character-1, includeDeclaration)
+	locs, err := c.client.FindReferences(ctx, filepath, line-1, character-1, includeDeclaration)
+	c.noteRequest(err)
+	return locs, err //nolint:wrapcheck
 }
 
 // Rename renames the symbol at the given position across all files.
@@ -713,7 +720,9 @@ func (c *Client) Rename(ctx context.Context, filepath string, line, character in
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	return c.client.RequestRename(ctx, filepath, line-1, character-1, newName) //nolint:wrapcheck
+	edit, err := c.client.RequestRename(ctx, filepath, line-1, character-1, newName)
+	c.noteRequest(err)
+	return edit, err //nolint:wrapcheck
 }
 
 // DocumentSymbols returns the document symbols for the given file.
@@ -725,7 +734,9 @@ func (c *Client) DocumentSymbols(ctx context.Context, filepath string) ([]protoc
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return c.client.RequestDocumentSymbols(ctx, filepath) //nolint:wrapcheck
+	symbols, err := c.client.RequestDocumentSymbols(ctx, filepath)
+	c.noteRequest(err)
+	return symbols, err //nolint:wrapcheck
 }
 
 // Definition finds the definition of the symbol at the given position.
@@ -737,7 +748,9 @@ func (c *Client) Definition(ctx context.Context, filepath string, line, characte
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return c.client.RequestDefinition(ctx, filepath, line-1, character-1) //nolint:wrapcheck
+	locs, err := c.client.RequestDefinition(ctx, filepath, line-1, character-1)
+	c.noteRequest(err)
+	return locs, err //nolint:wrapcheck
 }
 
 // PrepareCallHierarchy prepares a call hierarchy item at the given position.
@@ -749,7 +762,9 @@ func (c *Client) PrepareCallHierarchy(ctx context.Context, filepath string, line
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	return c.client.PrepareCallHierarchy(ctx, filepath, line-1, character-1) //nolint:wrapcheck
+	items, err := c.client.PrepareCallHierarchy(ctx, filepath, line-1, character-1)
+	c.noteRequest(err)
+	return items, err //nolint:wrapcheck
 }
 
 // IncomingCalls returns all callers of the given call hierarchy item.
@@ -757,7 +772,9 @@ func (c *Client) IncomingCalls(ctx context.Context, item protocol.CallHierarchyI
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	return c.client.IncomingCalls(ctx, item) //nolint:wrapcheck
+	calls, err := c.client.IncomingCalls(ctx, item)
+	c.noteRequest(err)
+	return calls, err //nolint:wrapcheck
 }
 
 // OutgoingCalls returns all callees of the given call hierarchy item.
@@ -765,5 +782,7 @@ func (c *Client) OutgoingCalls(ctx context.Context, item protocol.CallHierarchyI
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	return c.client.OutgoingCalls(ctx, item) //nolint:wrapcheck
+	calls, err := c.client.OutgoingCalls(ctx, item)
+	c.noteRequest(err)
+	return calls, err //nolint:wrapcheck
 }

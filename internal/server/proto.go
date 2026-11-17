@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/crush/internal/backend"
 	"github.com/charmbracelet/crush/internal/proto"
 	"github.com/charmbracelet/crush/internal/session"
+	"github.com/charmbracelet/crush/internal/shell"
 	"github.com/google/uuid"
 )
 
@@ -428,6 +429,31 @@ func (c *controllerV1) handleDeleteWorkspaceSession(w http.ResponseWriter, r *ht
 	w.WriteHeader(http.StatusOK)
 }
 
+// handlePostWorkspaceSessionRewind truncates a session transcript at the
+// given message: it and everything after it are removed.
+func (c *controllerV1) handlePostWorkspaceSessionRewind(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sid := r.PathValue("sid")
+
+	var req proto.RewindRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+	if req.MessageID == "" {
+		jsonError(w, http.StatusBadRequest, "message_id is required")
+		return
+	}
+
+	removed, err := c.backend.RewindSession(r.Context(), id, sid, req.MessageID)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, removed)
+}
+
 // handleGetWorkspaceSessionUserMessages returns user messages for a session.
 func (c *controllerV1) handleGetWorkspaceSessionUserMessages(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -532,6 +558,40 @@ func (c *controllerV1) handleGetWorkspaceAgent(w http.ResponseWriter, r *http.Re
 		return
 	}
 	jsonEncode(w, info)
+}
+
+// handleGetWorkspaceJobs lists the background shells this process tracks.
+func (c *controllerV1) handleGetWorkspaceJobs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	jobs, err := c.backend.ListBackgroundJobs(id)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, jobs)
+}
+
+// handleGetWorkspaceJobOutput returns a job's status and retained output.
+func (c *controllerV1) handleGetWorkspaceJobOutput(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	jid := r.PathValue("jid")
+	out, err := c.backend.BackgroundJobOutput(id, jid)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, out)
+}
+
+// handlePostWorkspaceJobKill terminates a background job's process group.
+func (c *controllerV1) handlePostWorkspaceJobKill(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	jid := r.PathValue("jid")
+	if err := c.backend.KillBackgroundJob(id, jid); err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 // handlePostWorkspaceAgent sends a message to the agent.
@@ -653,6 +713,26 @@ func (c *controllerV1) handlePostWorkspaceAgentSessionPromptClear(w http.Respons
 		return
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+// handlePostWorkspaceAgentSessionPromptRemove drops a single queued prompt.
+func (c *controllerV1) handlePostWorkspaceAgentSessionPromptRemove(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sid := r.PathValue("sid")
+
+	var req proto.RemoveQueuedPromptRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		c.server.logError(r, "Failed to decode request", "error", err)
+		jsonError(w, http.StatusBadRequest, "failed to decode request")
+		return
+	}
+
+	removed, err := c.backend.RemoveQueuedPrompt(id, sid, req.Index, req.Prompt)
+	if err != nil {
+		c.handleError(w, r, err)
+		return
+	}
+	jsonEncode(w, removed)
 }
 
 // handlePostWorkspaceAgentSessionNote keeps a note for the session's next prompt.
@@ -812,12 +892,20 @@ func (c *controllerV1) handleError(w http.ResponseWriter, r *http.Request, err e
 		status = http.StatusNotFound
 	case errors.Is(err, backend.ErrLSPClientNotFound):
 		status = http.StatusNotFound
+	case errors.Is(err, shell.ErrJobNotFound):
+		// The job finished long enough ago to be pruned, or never ran
+		// in this process; either way there is nothing to read or kill.
+		status = http.StatusNotFound
 	case errors.Is(err, backend.ErrAgentNotInitialized):
 		status = http.StatusBadRequest
 	case errors.Is(err, backend.ErrAgentBusy):
 		// Switching the main agent mid-run could strand the run's
 		// queued prompts on the previous agent; mirror the TUI's
 		// own busy guard for API callers.
+		status = http.StatusConflict
+	case errors.Is(err, backend.ErrSessionBusy):
+		// A rewind during a live turn would race the messages the run
+		// keeps appending; ask the caller to retry once it is idle.
 		status = http.StatusConflict
 	case errors.Is(err, backend.ErrPathRequired):
 		status = http.StatusBadRequest

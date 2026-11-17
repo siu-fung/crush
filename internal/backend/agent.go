@@ -247,6 +247,22 @@ func (b *Backend) ClearQueue(workspaceID, sessionID string) error {
 	return nil
 }
 
+// RemoveQueuedPrompt drops the queued prompt at index for the session,
+// reporting whether an entry was removed. prompt, when set, lets the agent
+// tell a stale index from a live one.
+func (b *Backend) RemoveQueuedPrompt(workspaceID, sessionID string, index int, prompt string) (bool, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return false, err
+	}
+
+	if ws.AgentCoordinator == nil {
+		return false, nil
+	}
+
+	return ws.AgentCoordinator.RemoveQueuedPrompt(sessionID, index, prompt), nil
+}
+
 // AddNote keeps text for the session's next prompt. It does not start a run.
 func (b *Backend) AddNote(workspaceID, sessionID, text string) error {
 	ws, err := b.GetWorkspace(workspaceID)

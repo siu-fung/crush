@@ -244,13 +244,14 @@ func processMultiEditWithCreation(edit editContext, params MultiEditParams, call
 }
 
 func processMultiEditExistingFile(edit editContext, params MultiEditParams, call fantasy.ToolCall) (fantasy.ToolResponse, error) {
-	sessionID, oldContent, isCrlf, resp, err := loadExistingFile(edit, params.FilePath, "session ID is required for editing a file")
+	file, resp, err := loadExistingFile(edit, params.FilePath, "session ID is required for editing a file")
 	if err != nil {
 		return fantasy.ToolResponse{}, err
 	}
 	if resp.Content != "" || resp.IsError {
 		return resp, nil
 	}
+	sessionID, oldContent := file.sessionID, file.content
 
 	currentContent, failedEdits, whitespaceCorrected := applyEditsToContent(oldContent, params.Edits, 0)
 
@@ -309,11 +310,12 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	}
 
 	writeContent := currentContent
-	if isCrlf {
+	if file.crlf {
 		writeContent, _ = fsext.ToWindowsLineEndings(writeContent)
 	}
 
-	if err := commitFileChange(edit, sessionID, params.FilePath, oldContent, writeContent); err != nil {
+	replaced, err := commitFileChange(edit, file, writeContent)
+	if err != nil {
 		return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to write file: %s", err)), nil
 	}
 
@@ -326,7 +328,7 @@ func processMultiEditExistingFile(edit editContext, params MultiEditParams, call
 	message = withWhitespaceNote(message, whitespaceCorrected)
 
 	return fantasy.WithResponseMetadata(
-		fantasy.NewTextResponse(message),
+		fantasy.NewTextResponse(message+encodingNote(file.encoding, replaced)),
 		MultiEditResponseMetadata{
 			OldContent:   oldContent,
 			NewContent:   currentContent,

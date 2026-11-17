@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,7 +34,11 @@ var runCmd = &cobra.Command{
 	Use:     "run [prompt...]",
 	Short:   "Run a single non-interactive prompt",
 	Long: `Run a single prompt in non-interactive mode and exit.
-The prompt can be provided as arguments or piped from stdin.`,
+The prompt can be provided as arguments or piped from stdin.
+
+With --json, the final agent result is printed as a JSON object instead of
+streamed text. JSON mode runs the agent in-process, so it is not available
+when CRUSH_CLIENT_SERVER is set.`,
 	Example: `
 # Run a simple prompt
 crush run "Guess my 5 favorite Pokémon"
@@ -64,11 +69,15 @@ crush run --session {session-id} "Follow up on your last response"
 # Continue the most recent session
 crush run --continue "Follow up on your last response"
 
+# Print the final answer as JSON instead of streaming text
+crush run --json "Summarize this repository"
+
   `,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var (
 			quiet, _           = cmd.Flags().GetBool("quiet")
 			verbose, _         = cmd.Flags().GetBool("verbose")
+			jsonOutput, _      = cmd.Flags().GetBool("json")
 			largeModel, _      = cmd.Flags().GetString("model")
 			smallModel, _      = cmd.Flags().GetString("small-model")
 			reasoningEffort, _ = cmd.Flags().GetString("reasoning-effort")
@@ -90,6 +99,13 @@ crush run --continue "Follow up on your last response"
 
 		if prompt == "" {
 			return fmt.Errorf("no prompt provided")
+		}
+
+		// JSON output runs the agent in-process so the caller gets the
+		// Coordinator result directly. A remote server would not hand
+		// back the structured result this mode promises.
+		if jsonOutput && useClientServer() {
+			return fmt.Errorf("--json is not supported with CRUSH_CLIENT_SERVER; run without the client/server mode")
 		}
 
 		event.SetNonInteractive(true)
@@ -162,6 +178,17 @@ crush run --continue "Follow up on your last response"
 			sessionID = sess.ID
 		}
 
+		if jsonOutput {
+			result, err := appWs.App().RunNonInteractiveJSON(ctx, prompt, largeModel, smallModel, reasoningEffort, sessionID, useLast)
+			if err != nil {
+				return err
+			}
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetEscapeHTML(false)
+			enc.SetIndent("", "  ")
+			return enc.Encode(result)
+		}
+
 		return appWs.App().RunNonInteractive(ctx, os.Stdout, prompt, largeModel, smallModel, reasoningEffort, quiet || verbose, sessionID, useLast)
 	},
 }
@@ -169,6 +196,7 @@ crush run --continue "Follow up on your last response"
 func init() {
 	runCmd.Flags().BoolP("quiet", "q", false, "Hide spinner")
 	runCmd.Flags().BoolP("verbose", "v", false, "Show logs")
+	runCmd.Flags().Bool("json", false, "Output the final result as JSON (in-process only)")
 	runCmd.Flags().StringP("model", "m", "", "Model to use. Accepts 'model' or 'provider/model' to disambiguate models with the same name across providers")
 	runCmd.Flags().String("small-model", "", "Small model to use. If not provided, uses the default small model for the provider")
 	runCmd.Flags().String("reasoning-effort", "", "Reasoning effort for the model (e.g. low, medium, high). Levels depend on the model; unsupported values are rejected with the accepted values listed")

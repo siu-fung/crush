@@ -56,6 +56,19 @@ type UpdateAvailableMsg struct {
 	IsDevelopment  bool
 }
 
+// NonInteractiveResult is the outcome of a headless agent run, shaped for
+// `crush run --json`.
+type NonInteractiveResult struct {
+	SessionID    string        `json:"session_id"`
+	SessionTitle string        `json:"session_title,omitempty"`
+	Provider     string        `json:"provider,omitempty"`
+	Model        string        `json:"model,omitempty"`
+	Text         string        `json:"text"`
+	FinishReason string        `json:"finish_reason,omitempty"`
+	Steps        int           `json:"steps"`
+	Usage        fantasy.Usage `json:"usage"`
+}
+
 type App struct {
 	Sessions    session.Service
 	Messages    message.Service
@@ -121,6 +134,11 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	hookRunner := hooks.NewRunner(func() map[string][]config.HookConfig {
 		return store.Config().Hooks
 	}, store.WorkingDir(), store.WorkingDir())
+	// Cap how often hooks may keep one turn going, so a hook that says
+	// "fix the failing command" cannot loop forever.
+	hookRunner.SetContinuationLimit(func() int {
+		return store.Config().Options.GetHookContinuationLimit()
+	})
 
 	permSvc := permission.NewPermissionService(store.WorkingDir(), allowedTools, permissionHooks{hookRunner})
 	if store.Overrides().PermissionMode != permission.PermissionModeNormal {
@@ -265,6 +283,10 @@ func New(ctx context.Context, conn *sql.DB, store *config.ConfigStore, skillsMgr
 	// TrackConfigured must run after SetCallback so the callback is already
 	// installed when configured-but-not-yet-started LSPs are announced.
 	go app.LSPManager.TrackConfigured(ctx)
+
+	// Keep language servers usable: probe each one on a timer and restart
+	// the (workspace, server) pairs that keep timing out or crashing.
+	app.LSPManager.StartHealthMonitor(ctx)
 
 	return app, nil
 }
@@ -535,6 +557,103 @@ func (app *App) RunNonInteractive(ctx context.Context, output io.Writer, prompt,
 			return ctx.Err()
 		}
 	}
+}
+
+// RunNonInteractiveJSON runs a single prompt without streaming to stdout and
+// returns the final agent result. It backs `crush run --json`: the caller
+// prints the returned value as JSON and exits.
+func (app *App) RunNonInteractiveJSON(ctx context.Context, prompt, largeModel, smallModel, reasoningEffort, continueSessionID string, useLast bool) (*NonInteractiveResult, error) {
+	slog.Info("Running in non-interactive JSON mode")
+
+	// No dialog can answer an integrated pinentry or ssh prompt here, so
+	// let the underlying tools handle (or fail) those prompts themselves
+	// instead of waiting forever.
+	pinentry.DisableIntegration()
+	sshaskpass.DisableIntegration()
+
+	// Re-initialize the coder agent without interactive-only tools.
+	if err := app.InitCoderAgentNonInteractive(ctx); err != nil {
+		return nil, fmt.Errorf("failed to reinitialize agent for non-interactive mode: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	if largeModel != "" || smallModel != "" {
+		if err := app.overrideModelsForNonInteractive(ctx, largeModel, smallModel); err != nil {
+			return nil, fmt.Errorf("failed to override models: %w", err)
+		}
+	}
+
+	// The reasoning effort applies to the model that will actually run.
+	// On a continued session without an explicit model override, the
+	// model is resolved later from the session's last assistant message,
+	// so the override is applied after that restore instead.
+	deferredEffort := (continueSessionID != "" || useLast) && largeModel == "" && smallModel == ""
+	if reasoningEffort != "" && !deferredEffort {
+		if err := app.overrideReasoningEffort(ctx, reasoningEffort); err != nil {
+			return nil, err
+		}
+	}
+
+	// A headless run gets a single shot at the tool palette, so wait for
+	// MCP initialization to settle before reading MCP tools. The wait is
+	// bounded so a server wedged mid-handshake cannot stall the run.
+	if err := mcp.WaitForInitBudget(ctx, mcp.InitWaitBudget); err != nil {
+		return nil, fmt.Errorf("failed to wait for MCP initialization: %w", err)
+	}
+	app.AgentCoordinator.UpdateModels(ctx)
+
+	sess, err := app.resolveSession(ctx, continueSessionID, useLast)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve session for non-interactive mode: %w", err)
+	}
+	if continueSessionID != "" || useLast {
+		slog.Info("Continuing session for non-interactive JSON run", "session_id", sess.ID)
+		// If no explicit model override was requested, restore the
+		// model/provider from the last assistant message in the session.
+		if largeModel == "" && smallModel == "" {
+			if err := app.restoreModelFromSession(ctx, sess.ID); err != nil {
+				slog.Warn("Failed to restore model from session", "error", err)
+			}
+		}
+	} else {
+		slog.Info("Created session for non-interactive JSON run", "session_id", sess.ID)
+	}
+
+	if reasoningEffort != "" && deferredEffort {
+		if err := app.overrideReasoningEffort(ctx, reasoningEffort); err != nil {
+			return nil, err
+		}
+	}
+
+	// Automatically approve all permission requests for this non-interactive
+	// session.
+	app.Permissions.AutoApproveSession(sess.ID)
+	app.ReportCurrentSession(sess.ID)
+
+	model := app.AgentCoordinator.Model()
+	result, err := app.AgentCoordinator.Run(ctx, sess.ID, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("agent processing failed: %w", err)
+	}
+	if result == nil {
+		return nil, errors.New("agent returned no result")
+	}
+
+	res := &NonInteractiveResult{
+		SessionID:    sess.ID,
+		SessionTitle: sess.Title,
+		Provider:     model.ModelCfg.Provider,
+		Model:        model.ModelCfg.Model,
+		Usage:        result.TotalUsage,
+	}
+	if result.Response.FinishReason != "" {
+		res.FinishReason = string(result.Response.FinishReason)
+	}
+	res.Text = result.Response.Content.Text()
+	res.Steps = len(result.Steps)
+	return res, nil
 }
 
 func (app *App) UpdateAgentModel(ctx context.Context) error {

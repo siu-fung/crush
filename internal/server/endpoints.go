@@ -211,6 +211,19 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(404, 500).
 			Handle(c.handleDeleteWorkspaceSession),
 
+		apigen.Post("/v1/workspaces/{id}/sessions/{sid}/rewind").
+			Summary("Rewind session").
+			Description("Deletes the given message and every message after it, returning "+
+				"how many were removed. Fails with 409 while the agent still has work on "+
+				"the session.").
+			Tags("sessions").
+			PathParam("id", "Workspace ID").
+			PathParam("sid", "Session ID").
+			Accepts(proto.RewindRequest{}).
+			Responds(0).
+			Fails(400, 404, 409, 500).
+			Handle(c.handlePostWorkspaceSessionRewind),
+
 		apigen.Get("/v1/workspaces/{id}/sessions/{sid}/history").
 			Summary("Get session history").
 			Tags("sessions").
@@ -379,6 +392,35 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			Fails(404, 500).
 			Handle(c.handleGetWorkspaceAgent),
 
+		apigen.Get("/v1/workspaces/{id}/jobs").
+			Summary("List background jobs").
+			Description("Lists the background shells the agent has started in this "+
+				"process, running ones first and then by most recent start.").
+			Tags("jobs").
+			PathParam("id", "Workspace ID").
+			Responds([]proto.BackgroundJob{}).
+			Fails(404, 500).
+			Handle(c.handleGetWorkspaceJobs),
+
+		apigen.Get("/v1/workspaces/{id}/jobs/{jid}/output").
+			Summary("Get background job output").
+			Description("Returns the job's status and the last 100 lines it printed.").
+			Tags("jobs").
+			PathParam("id", "Workspace ID").
+			PathParam("jid", "Job ID").
+			Responds(proto.BackgroundJobOutput{}).
+			Fails(404, 500).
+			Handle(c.handleGetWorkspaceJobOutput),
+
+		apigen.Post("/v1/workspaces/{id}/jobs/{jid}/kill").
+			Summary("Kill background job").
+			Description("Terminates the job and the process group it spawned.").
+			Tags("jobs").
+			PathParam("id", "Workspace ID").
+			PathParam("jid", "Job ID").
+			Fails(404, 500).
+			Handle(c.handlePostWorkspaceJobKill),
+
 		apigen.Post("/v1/workspaces/{id}/agent").
 			Summary("Send message to agent").
 			Description("Validates and accepts the prompt, then dispatches the run "+
@@ -459,6 +501,18 @@ func (c *controllerV1) endpoints() []apigen.Endpoint {
 			PathParam("sid", "Session ID").
 			Fails(404, 500).
 			Handle(c.handlePostWorkspaceAgentSessionPromptClear),
+
+		apigen.Post("/v1/workspaces/{id}/agent/sessions/{sid}/prompts/remove").
+			Summary("Remove a queued prompt").
+			Description("Drops the queued prompt at the given index. The rest of the "+
+				"queue keeps its order and still runs after the current turn.").
+			Tags("agent").
+			PathParam("id", "Workspace ID").
+			PathParam("sid", "Session ID").
+			Accepts(proto.RemoveQueuedPromptRequest{}).
+			Responds(false).
+			Fails(400, 404, 500).
+			Handle(c.handlePostWorkspaceAgentSessionPromptRemove),
 
 		apigen.Post("/v1/workspaces/{id}/agent/sessions/{sid}/notes").
 			Summary("Add a note for the next prompt").

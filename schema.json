@@ -560,6 +560,20 @@
           "type": "array",
           "description": "Paths to directories containing Agent Skills (folders with SKILL.md files)"
         },
+        "system_prompt": {
+          "type": "string",
+          "description": "Custom instructions appended to every agent's system prompt. The built-in instructions stay in effect.",
+          "examples": [
+            "Always answer in Spanish."
+          ]
+        },
+        "system_prompt_file": {
+          "type": "string",
+          "description": "Path to a file whose contents are appended to every agent's system prompt. Supports ~ and environment variables; relative paths resolve against the working directory.",
+          "examples": [
+            "~/.config/crush/system_prompt.md"
+          ]
+        },
         "tui": {
           "$ref": "#/$defs/TUIOptions",
           "description": "Terminal user interface options"
@@ -677,6 +691,14 @@
           "examples": [
             10,
             200
+          ]
+        },
+        "hook_continuation_limit": {
+          "type": "integer",
+          "description": "How many times hooks may keep a single turn going by marking their output as a continuation. Once the budget is spent the hook output is replaced with an instruction to stop retrying. 0 or negative restores the default.",
+          "default": 5,
+          "examples": [
+            3
           ]
         },
         "pinentry_integrated": {

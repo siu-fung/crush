@@ -420,3 +420,53 @@ func TestBackgroundShellManager_PruneDropsOldestFinished(t *testing.T) {
 
 	require.NoError(t, manager.Kill(bgShell.ID))
 }
+
+// Infos puts running jobs first, then the most recently started ones.
+func TestBackgroundShellManager_InfosOrdersRunningFirst(t *testing.T) {
+	t.Parallel()
+
+	manager := newBackgroundShellManager()
+	now := time.Now().Unix()
+	track(manager, "old-done", now-100)
+	track(manager, "new-done", now-10)
+	track(manager, "running-old", 0)
+	track(manager, "running-new", 0)
+	manager.shells["old-done"].startedAt = now - 100
+	manager.shells["new-done"].startedAt = now - 10
+	manager.shells["running-old"].startedAt = now - 50
+	manager.shells["running-new"].startedAt = now - 5
+
+	infos := manager.Infos()
+	require.Len(t, infos, 4)
+	require.Equal(t, []string{"running-new", "running-old", "new-done", "old-done"}, []string{
+		infos[0].ID, infos[1].ID, infos[2].ID, infos[3].ID,
+	})
+	require.True(t, infos[0].Running)
+	require.False(t, infos[2].Running)
+}
+
+// Output returns the snapshot plus the retained tails of both streams.
+func TestBackgroundShellManager_OutputJoinsTails(t *testing.T) {
+	t.Parallel()
+
+	manager := newBackgroundShellManager()
+	track(manager, "job", 0)
+	shell := manager.shells["job"]
+	shell.stdoutTail = newLineRing(JobTailLines)
+	shell.stderrTail = newLineRing(JobTailLines)
+	fmt.Fprint(shell.stdoutTail, "out\n")
+	fmt.Fprint(shell.stderrTail, "err\n")
+
+	info, output, err := manager.Output("job")
+	require.NoError(t, err)
+	require.Equal(t, "job", info.ID)
+	require.True(t, info.Running)
+	require.Equal(t, "out\nerr", output)
+}
+
+func TestBackgroundShellManager_OutputUnknownJob(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := newBackgroundShellManager().Output("missing")
+	require.ErrorIs(t, err, ErrJobNotFound)
+}

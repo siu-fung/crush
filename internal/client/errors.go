@@ -34,6 +34,11 @@ var (
 	// what is safe to do with an older server rather than treating the
 	// failure as transient.
 	ErrUnsupported = errors.New("unsupported by the running server")
+
+	// ErrSessionBusy reports that the server refused the request because
+	// the agent still has work running or queued on the session. Retrying
+	// once the run finishes is the expected response.
+	ErrSessionBusy = errors.New("session busy")
 )
 
 // checkStatus returns nil when rsp's status code is one of ok
@@ -57,6 +62,8 @@ func checkStatus(rsp *http.Response, ok ...int) error {
 	switch rsp.StatusCode {
 	case http.StatusNotFound:
 		return fmt.Errorf("%w: %w", ErrNotFound, err)
+	case http.StatusConflict:
+		return fmt.Errorf("%w: %w", ErrSessionBusy, err)
 	case http.StatusServiceUnavailable:
 		return fmt.Errorf("%w: %w", ErrServerShuttingDown, err)
 	}

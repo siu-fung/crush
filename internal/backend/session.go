@@ -212,6 +212,22 @@ func (b *Backend) StartMCPServer(ctx context.Context, workspaceID, name string) 
 	return mcptools.InitializeSingleForced(ctx, name, ws.Cfg)
 }
 
+// RewindSession truncates a session's transcript at messageID: that message
+// and everything after it are removed. It returns how many messages were
+// removed, and refuses to run while the agent still has work on the session.
+func (b *Backend) RewindSession(ctx context.Context, workspaceID, sessionID, messageID string) (int, error) {
+	ws, err := b.GetWorkspace(workspaceID)
+	if err != nil {
+		return 0, err
+	}
+
+	if ws.AgentCoordinator != nil && ws.AgentCoordinator.IsSessionBusy(sessionID) {
+		return 0, ErrSessionBusy
+	}
+
+	return ws.Messages.TruncateFrom(ctx, sessionID, messageID)
+}
+
 // DeleteSession deletes a session from the given workspace.
 func (b *Backend) DeleteSession(ctx context.Context, workspaceID, sessionID string) error {
 	ws, err := b.GetWorkspace(workspaceID)

@@ -50,6 +50,10 @@ type PromptDat struct {
 	GlobalContextFiles []ContextFile
 	AvailSkillXML      string
 	CanWrite           bool
+	// CustomPrompt is the user's own instruction text from
+	// options.system_prompt and options.system_prompt_file. Empty when
+	// the user configured neither.
+	CustomPrompt string
 	// ToolNames are the tools the agent is actually given, which is not
 	// always its whole configured set: some tools depend on the run mode.
 	ToolNames []string
@@ -208,6 +212,35 @@ func loadContextFiles(paths []string, store *config.ConfigStore) map[string][]Co
 	return files
 }
 
+// resolveCustomPrompt returns the user's own instructions from
+// options.system_prompt and options.system_prompt_file. Inline text comes
+// first and the file's contents follow when both are configured. A
+// configured file that cannot be read is an error rather than a silent
+// omission, so a typo does not quietly leave the user's instructions out
+// of every request.
+func resolveCustomPrompt(cfg *config.Config, store *config.ConfigStore) (string, error) {
+	if cfg == nil || cfg.Options == nil {
+		return "", nil
+	}
+	var sections []string
+	if inline := strings.TrimSpace(cfg.Options.SystemPrompt); inline != "" {
+		sections = append(sections, inline)
+	}
+	path := strings.TrimSpace(cfg.Options.SystemPromptFile)
+	if path == "" {
+		return strings.Join(sections, "\n\n"), nil
+	}
+	filePath := filepathext.SmartJoin(store.WorkingDir(), expandPath(path, store))
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", fmt.Errorf("reading system_prompt_file %q: %w", path, err)
+	}
+	if fromFile := strings.TrimSpace(string(content)); fromFile != "" {
+		sections = append(sections, fromFile)
+	}
+	return strings.Join(sections, "\n\n"), nil
+}
+
 func (p *Prompt) promptData(ctx context.Context, provider, model string, store *config.ConfigStore) (PromptDat, error) {
 	workingDir := cmp.Or(p.workingDir, store.WorkingDir())
 	platform := cmp.Or(p.platform, runtime.GOOS)
@@ -273,6 +306,10 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 	}
 
 	isGit := isGitRepo(store.WorkingDir())
+	customPrompt, err := resolveCustomPrompt(cfg, store)
+	if err != nil {
+		return PromptDat{}, err
+	}
 	data := PromptDat{
 		Provider:      provider,
 		Model:         model,
@@ -283,6 +320,7 @@ func (p *Prompt) promptData(ctx context.Context, provider, model string, store *
 		Date:          p.now().Format("1/2/2006"),
 		AvailSkillXML: availSkillXML,
 		CanWrite:      p.canWrite,
+		CustomPrompt:  customPrompt,
 		ToolNames:     p.toolNames,
 	}
 	if isGit {

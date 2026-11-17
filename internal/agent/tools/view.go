@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/permission"
 	"github.com/charmbracelet/crush/internal/skills"
+	"github.com/charmbracelet/crush/internal/textenc"
 )
 
 //go:embed view.md.tpl
@@ -66,6 +67,7 @@ const (
 type ViewResponseMetadata struct {
 	FilePath            string           `json:"file_path"`
 	Content             string           `json:"content"`
+	Encoding            string           `json:"encoding,omitempty"`
 	ResourceType        ViewResourceType `json:"resource_type,omitempty"`
 	ResourceName        string           `json:"resource_name,omitempty"`
 	ResourceDescription string           `json:"resource_description,omitempty"`
@@ -231,7 +233,7 @@ func NewViewTool(
 			if isSkillFile {
 				maxContentSize = 0
 			}
-			content, hasMore, err := readTextFile(filePath, params.Offset, params.Limit, maxContentSize)
+			content, encoding, hasMore, err := readTextFile(filePath, params.Offset, params.Limit, maxContentSize)
 			if err != nil {
 				var tooLarge contentTooLargeError
 				if errors.As(err, &tooLarge) {
@@ -240,8 +242,8 @@ func NewViewTool(
 				}
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to read file: %s", err)), nil
 			}
-			if !utf8.ValidString(content) {
-				return fantasy.NewTextErrorResponse("File content is not valid UTF-8"), nil
+			if !encoding.Valid() {
+				return fantasy.NewTextErrorResponse("File content is not valid UTF-8 and its encoding could not be detected (tried GBK, Shift_JIS, Big5, and UTF-16). It may be a binary file."), nil
 			}
 
 			openInLSPs(ctx, lspManager, filePath)
@@ -254,12 +256,19 @@ func NewViewTool(
 					params.Offset+len(strings.Split(content, "\n")))
 			}
 			output += "\n</file>\n"
+			if !encoding.IsUTF8() {
+				// Say so explicitly: the model sees decoded text, and the
+				// write tools convert edits back to this encoding.
+				output += fmt.Sprintf("(File encoding: %s. Content above is decoded to UTF-8; edits are written back as %s.)\n",
+					encoding.Name(), encoding.Name())
+			}
 			output += getDiagnostics(filePath, lspManager)
 			filetracker.RecordRead(ctx, sessionID, filePath)
 
 			meta := ViewResponseMetadata{
 				FilePath: filePath,
 				Content:  content,
+				Encoding: encoding.Name(),
 			}
 			if isSkillFile {
 				if skill, err := skills.Parse(filePath); err == nil {
@@ -303,10 +312,14 @@ func addLineNumbers(content string, startLine int) string {
 	return strings.Join(result, "\n")
 }
 
-func readTextFile(filePath string, offset, limit, maxContentSize int) (string, bool, error) {
-	file, err := os.Open(filePath)
+// readTextFile reads at most limit lines starting at offset, returning
+// the lines as UTF-8 text plus the encoding the file is stored in.
+// Files that are not UTF-8 are decoded on the fly, so the caller always
+// works with real characters instead of mojibake.
+func readTextFile(filePath string, offset, limit, maxContentSize int) (string, textenc.Encoding, bool, error) {
+	file, encoding, err := textenc.Open(filePath)
 	if err != nil {
-		return "", false, err
+		return "", textenc.UTF8, false, err
 	}
 	defer file.Close()
 
@@ -316,9 +329,9 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 		_, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				return "", false, nil
+				return "", encoding, false, nil
 			}
-			return "", false, err
+			return "", encoding, false, err
 		}
 		skipped++
 	}
@@ -329,7 +342,7 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 	for len(lines) < limit {
 		lineText, err := reader.ReadString('\n')
 		if err != nil && err != io.EOF {
-			return "", false, err
+			return "", encoding, false, err
 		}
 		lineText = strings.TrimSuffix(lineText, "\n")
 		lineText = strings.TrimSuffix(lineText, "\r")
@@ -343,7 +356,7 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 			projectedSize++
 		}
 		if maxContentSize > 0 && projectedSize > maxContentSize {
-			return "", false, contentTooLargeError{Size: projectedSize, Max: maxContentSize}
+			return "", encoding, false, contentTooLargeError{Size: projectedSize, Max: maxContentSize}
 		}
 		contentSize = projectedSize
 		lines = append(lines, lineText)
@@ -359,7 +372,7 @@ func readTextFile(filePath string, offset, limit, maxContentSize int) (string, b
 		hasMore = len(lineText) > 0 || peekErr == nil
 	}
 
-	return strings.Join(lines, "\n"), hasMore, nil
+	return strings.Join(lines, "\n"), encoding, hasMore, nil
 }
 
 func getImageMimeType(filePath string) (bool, string) {

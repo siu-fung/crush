@@ -3,6 +3,7 @@ package hooks
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -44,6 +45,13 @@ type Runner struct {
 
 	matchersMu sync.Mutex
 	matchers   map[string]*regexp.Regexp // nil value: pattern did not compile
+
+	// limitFn reports the per-turn continuation budget. Nil, or a
+	// non-positive value, means uncapped.
+	limitFn func() int
+
+	contMu        sync.Mutex
+	continuations map[string]int // session ID: continuations used this turn
 }
 
 // NewRunner creates a Runner that reads hook configs from source.
@@ -53,11 +61,23 @@ type Runner struct {
 // errors earlier, so this is defense in depth.
 func NewRunner(source Source, cwd, projectDir string) *Runner {
 	return &Runner{
-		source:     source,
-		cwd:        cwd,
-		projectDir: projectDir,
-		matchers:   make(map[string]*regexp.Regexp),
+		source:        source,
+		cwd:           cwd,
+		projectDir:    projectDir,
+		matchers:      make(map[string]*regexp.Regexp),
+		continuations: make(map[string]int),
 	}
+}
+
+// SetContinuationLimit installs the per-turn continuation budget. It is
+// read on every event so a config reload takes effect without rewiring.
+// A nil function, or one that returns a non-positive value, disables the
+// cap.
+func (r *Runner) SetContinuationLimit(limit func() int) {
+	if r == nil {
+		return
+	}
+	r.limitFn = limit
 }
 
 // Run executes every configured hook for the event in parallel and
@@ -68,6 +88,7 @@ func (r *Runner) Run(ctx context.Context, ev Event) AggregateResult {
 	if r == nil {
 		return AggregateResult{}
 	}
+	r.trackTurnBoundary(ev)
 	hooks := r.matchingHooks(ev)
 	if len(hooks) == 0 {
 		return AggregateResult{}
@@ -90,6 +111,7 @@ func (r *Runner) Run(ctx context.Context, ev Event) AggregateResult {
 		toolInput = ev.Tool.Input
 	}
 	agg := aggregate(results, toolInput)
+	agg = r.capContinuation(ev, agg)
 	agg.Hooks = make([]HookInfo, len(hooks))
 	for i, h := range hooks {
 		agg.Hooks[i] = HookInfo{
@@ -110,6 +132,59 @@ func (r *Runner) Run(ctx context.Context, ev Event) AggregateResult {
 		"hooks", agg.HookCount,
 		"decision", agg.Decision.String(),
 	)
+	return agg
+}
+
+// trackTurnBoundary clears a session's continuation budget when a turn
+// starts, and forgets it when the turn ends, so the budget is always
+// per-turn and the map does not grow with every session.
+func (r *Runner) trackTurnBoundary(ev Event) {
+	switch ev.Name {
+	case EventTurnStart, EventTurnEnd, EventInterrupt, EventStopFailure:
+		r.contMu.Lock()
+		delete(r.continuations, ev.SessionID)
+		r.contMu.Unlock()
+	}
+}
+
+// capContinuation spends one unit of the turn's continuation budget for
+// an event whose hooks asked the model to keep going. Once the budget is
+// gone the hooks' context is replaced with a stop instruction, so a
+// command that keeps failing cannot loop forever. Continuations on
+// events that carry no tool call are ignored: their context never
+// reaches the model.
+func (r *Runner) capContinuation(ev Event, agg AggregateResult) AggregateResult {
+	if !agg.Continuation || !EventHasTool(ev.Name) {
+		return agg
+	}
+	var limit int
+	if r.limitFn != nil {
+		limit = r.limitFn()
+	}
+	if limit <= 0 {
+		return agg
+	}
+	r.contMu.Lock()
+	r.continuations[ev.SessionID]++
+	used := r.continuations[ev.SessionID]
+	r.contMu.Unlock()
+	if used <= limit {
+		return agg
+	}
+	slog.Info(
+		"Hook continuation limit reached",
+		"session", ev.SessionID,
+		"event", ev.Name,
+		"tool", ev.toolName(),
+		"used", used,
+		"limit", limit,
+	)
+	agg.Context = fmt.Sprintf(
+		"Hook continuation limit reached (%d for this turn). %s",
+		limit, StopInstruction,
+	)
+	agg.Continuation = false
+	agg.ContinuationLimitReached = true
 	return agg
 }
 

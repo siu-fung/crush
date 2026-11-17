@@ -69,6 +69,26 @@ func sizeDialogList(t *styles.Styles, l sizer, innerWidth, dialogHeight int) (li
 	return listHeight, listTotalHeight, listWidth
 }
 
+// sizeDialogListBare is sizeDialogList for dialogs that render no input
+// line: the input prompt frame and its content row do not take part in the
+// height budget.
+func sizeDialogListBare(t *styles.Styles, l sizer, innerWidth, dialogHeight int) (listHeight, listTotalHeight, listWidth int) {
+	heightOffset := t.Dialog.Title.GetVerticalFrameSize() + titleContentHeight +
+		t.Dialog.HelpView.GetVerticalFrameSize() +
+		t.Dialog.View.GetVerticalFrameSize()
+
+	listHeight = max(0, dialogHeight-heightOffset)
+	listTotalHeight = l.TotalHeight()
+
+	scrollbarWidth := 0
+	if listTotalHeight > listHeight {
+		scrollbarWidth = 1
+	}
+	listWidth = max(0, innerWidth-scrollbarWidth)
+	l.SetSize(listWidth, listHeight)
+	return listHeight, listTotalHeight, listWidth
+}
+
 // joinScrollbar appends a vertical scrollbar to the right of view when the
 // content overflows its viewport, and returns view unchanged otherwise.
 // contentSize is the total content height, viewportSize the visible height,

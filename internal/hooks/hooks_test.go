@@ -3,6 +3,8 @@ package hooks
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -840,4 +842,166 @@ func TestRunnerPicksUpSourceChanges(t *testing.T) {
 
 	hooks = map[string][]HookConfig{EventPreToolUse: {{Command: "exit 0"}}}
 	require.Equal(t, 1, r.Run(context.Background(), preToolEvent("bash", `{}`)).HookCount)
+}
+
+func TestParseStdoutContinuation(t *testing.T) {
+	t.Parallel()
+
+	r, ok := parseStdout(`{"context":"fix it","continuation":true}`)
+	require.True(t, ok)
+	require.True(t, r.Continuation)
+	require.Equal(t, "fix it", r.Context)
+
+	plain, _ := parseStdout(`{"context":"just a note"}`)
+	require.False(t, plain.Continuation, "context alone is not a continuation")
+}
+
+// continuationRunner returns a runner whose only hook always emits a
+// continuation, capped at limit.
+func continuationRunner(t *testing.T, limit int) *Runner {
+	t.Helper()
+	r := NewRunner(Static(map[string][]HookConfig{
+		EventPostToolUse: {{Command: `echo '{"context":"fix it","continuation":true}'`}},
+	}), t.TempDir(), t.TempDir())
+	r.SetContinuationLimit(func() int { return limit })
+	return r
+}
+
+func TestRunnerContinuationLimit(t *testing.T) {
+	t.Parallel()
+	r := continuationRunner(t, 2)
+	failed := Event{
+		Name:         EventPostToolUse,
+		SessionID:    "s",
+		Tool:         &ToolCall{Name: "bash", Input: `{}`},
+		ToolResponse: new("Exit code 1"),
+	}
+
+	for i := 1; i <= 2; i++ {
+		got := r.Run(context.Background(), failed)
+		require.True(t, got.Continuation, "continuation %d is within budget", i)
+		require.Equal(t, "fix it", got.Context)
+		require.False(t, got.ContinuationLimitReached)
+	}
+
+	over := r.Run(context.Background(), failed)
+	require.True(t, over.ContinuationLimitReached)
+	require.False(t, over.Continuation)
+	require.Contains(t, over.Context, "Hook continuation limit reached (2")
+	require.Contains(t, over.Context, StopInstruction)
+
+	// A new turn gets a fresh budget.
+	r.Run(context.Background(), Event{Name: EventTurnStart, SessionID: "s"})
+	fresh := r.Run(context.Background(), failed)
+	require.True(t, fresh.Continuation)
+	require.False(t, fresh.ContinuationLimitReached)
+
+	// Ending the turn forgets the session instead of leaking it.
+	r.Run(context.Background(), Event{Name: EventTurnEnd, SessionID: "s"})
+	r.contMu.Lock()
+	require.Empty(t, r.continuations["s"])
+	r.contMu.Unlock()
+}
+
+func TestRunnerContinuationUncappedWithoutLimit(t *testing.T) {
+	t.Parallel()
+	r := NewRunner(Static(map[string][]HookConfig{
+		EventPostToolUse: {{Command: `echo '{"context":"fix it","continuation":true}'`}},
+	}), t.TempDir(), t.TempDir())
+
+	failed := Event{
+		Name:         EventPostToolUse,
+		SessionID:    "s",
+		Tool:         &ToolCall{Name: "bash", Input: `{}`},
+		ToolResponse: new("Exit code 1"),
+	}
+	for range 10 {
+		got := r.Run(context.Background(), failed)
+		require.True(t, got.Continuation)
+		require.False(t, got.ContinuationLimitReached)
+	}
+}
+
+func TestRunnerContinuationOnlyCapsContinuations(t *testing.T) {
+	t.Parallel()
+	r := NewRunner(Static(map[string][]HookConfig{
+		EventPostToolUse: {{Command: `echo '{"context":"just a note"}'`}},
+	}), t.TempDir(), t.TempDir())
+	r.SetContinuationLimit(func() int { return 1 })
+
+	// Plain context is not a continuation, so it is never capped.
+	for range 5 {
+		got := r.Run(context.Background(), Event{
+			Name:         EventPostToolUse,
+			SessionID:    "s",
+			Tool:         &ToolCall{Name: "bash", Input: `{}`},
+			ToolResponse: new("ok"),
+		})
+		require.Equal(t, "just a note", got.Context)
+		require.False(t, got.ContinuationLimitReached)
+	}
+}
+
+func TestRunnerContinuationIgnoredOnLifecycleEvents(t *testing.T) {
+	t.Parallel()
+	r := NewRunner(Static(map[string][]HookConfig{
+		EventTurnEnd: {{Command: `echo '{"context":"continuation","continuation":true}'`}},
+	}), t.TempDir(), t.TempDir())
+	r.SetContinuationLimit(func() int { return 0 })
+
+	// Lifecycle events never reach the model's context, so a
+	// continuation there is neither counted nor capped.
+	for range 3 {
+		got := r.Run(context.Background(), Event{Name: EventTurnEnd, SessionID: "s"})
+		require.Equal(t, "continuation", got.Context)
+		require.False(t, got.ContinuationLimitReached)
+	}
+}
+
+// TestBashFailureContinuationScript exercises the hook this repository
+// ships: it must inject the fix-and-retry context when the bash tool's
+// output carries an exit code, and stay silent otherwise. It also
+// covers shebang dispatch and jq parsing, which the inline hooks in the
+// other tests do not.
+func TestBashFailureContinuationScript(t *testing.T) {
+	t.Parallel()
+
+	script, err := filepath.Abs(filepath.Join("..", "..", "hooks", "bash-failure-continue.sh"))
+	require.NoError(t, err)
+	if _, err := os.Stat(script); err != nil {
+		t.Skipf("hook script not present: %v", err)
+	}
+
+	dir := t.TempDir()
+	r := NewRunner(Static(map[string][]HookConfig{
+		EventPostToolUse: {{Matcher: "^bash$", Command: script}},
+	}), dir, dir)
+
+	failed := r.Run(context.Background(), Event{
+		Name:         EventPostToolUse,
+		SessionID:    "s",
+		Tool:         &ToolCall{Name: "bash", Input: `{"command":"false"}`},
+		ToolResponse: new("go: build failed\n\nExit code 2\n\n<cwd>/tmp</cwd>"),
+	})
+	require.Equal(t, 1, failed.HookCount)
+	require.Contains(t, failed.Context, "上一条命令执行失败")
+	require.True(t, failed.Continuation, "the script must mark its context as a continuation")
+
+	ok := r.Run(context.Background(), Event{
+		Name:         EventPostToolUse,
+		SessionID:    "s",
+		Tool:         &ToolCall{Name: "bash", Input: `{"command":"true"}`},
+		ToolResponse: new("ok\n\n<cwd>/tmp</cwd>"),
+	})
+	require.Empty(t, ok.Context)
+	require.False(t, ok.Continuation)
+
+	// Other tools are not matched by the hook's matcher.
+	other := r.Run(context.Background(), Event{
+		Name:         EventPostToolUse,
+		SessionID:    "s",
+		Tool:         &ToolCall{Name: "view", Input: `{}`},
+		ToolResponse: new("Exit code 1"),
+	})
+	require.Zero(t, other.HookCount)
 }

@@ -52,9 +52,12 @@ func (m *Attachments) Update(msg tea.Msg) bool {
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, m.keyMap.DeleteMode):
-			if len(m.list) > 0 {
-				m.deleting = true
+			if len(m.list) == 0 {
+				// Nothing to delete, so let the key fall through to the
+				// global binding that shares it (the rewind picker).
+				return false
 			}
+			m.deleting = true
 			return true
 		case m.deleting && key.Matches(msg, m.keyMap.Escape):
 			m.deleting = false

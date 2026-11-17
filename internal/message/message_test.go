@@ -341,6 +341,54 @@ func TestDelete_DropsPendingState(t *testing.T) {
 	require.Error(t, err, "deleted message must remain deleted")
 }
 
+func TestTruncateFrom_RemovesAnchorAndEverythingAfter(t *testing.T) {
+	t.Parallel()
+
+	svc, sessionID := newTestService(t)
+	first, err := svc.Create(t.Context(), sessionID, CreateMessageParams{
+		Role:  User,
+		Parts: []ContentPart{TextContent{Text: "first"}},
+	})
+	require.NoError(t, err)
+	// created_at has one-second resolution, so the anchor needs to land in
+	// an earlier second for the window after it to be well defined.
+	time.Sleep(1100 * time.Millisecond)
+	second, err := svc.Create(t.Context(), sessionID, CreateMessageParams{
+		Role:  Assistant,
+		Parts: []ContentPart{TextContent{Text: "second"}},
+	})
+	require.NoError(t, err)
+
+	removed, err := svc.TruncateFrom(t.Context(), sessionID, first.ID)
+	require.NoError(t, err)
+	require.Equal(t, 2, removed)
+
+	left, err := svc.List(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Empty(t, left)
+
+	_, err = svc.Get(t.Context(), second.ID)
+	require.Error(t, err, "the message after the anchor must be gone too")
+}
+
+func TestTruncateFrom_UnknownMessage(t *testing.T) {
+	t.Parallel()
+
+	svc, sessionID := newTestService(t)
+	_, err := svc.Create(t.Context(), sessionID, CreateMessageParams{
+		Role:  User,
+		Parts: []ContentPart{TextContent{Text: "kept"}},
+	})
+	require.NoError(t, err)
+
+	_, err = svc.TruncateFrom(t.Context(), sessionID, "missing")
+	require.ErrorContains(t, err, "not found")
+
+	left, err := svc.List(t.Context(), sessionID)
+	require.NoError(t, err)
+	require.Len(t, left, 1, "a failed truncate must not drop anything")
+}
+
 func TestBroker_PublishLossyDropCounter(t *testing.T) {
 	t.Parallel()
 

@@ -37,6 +37,42 @@ type ActionSelectSession struct {
 	Session session.Session
 }
 
+// ActionRewind asks the UI to truncate the session transcript at
+// MessageID, dropping that message and everything after it, and to put
+// Prompt back into the editor so the user can resend it.
+type ActionRewind struct {
+	MessageID string
+	Prompt    string
+}
+
+// ActionRemoveQueuedPrompt asks the UI to drop the queued prompt at
+// Index. The dialog has already removed it from its own list. Prompt is
+// the raw queued text, so the agent can tell a stale index from a live
+// one.
+type ActionRemoveQueuedPrompt struct {
+	Index  int
+	Prompt string
+}
+
+// ActionClearQueue asks the UI to drop every queued prompt for the
+// session.
+type ActionClearQueue struct{}
+
+// ActionKillJob asks the UI to terminate the background job with the
+// given ID, including everything it spawned.
+type ActionKillJob struct {
+	ID string
+}
+
+// ActionJobOutputRequest asks the UI to load and show the retained output
+// of the background job with the given ID.
+type ActionJobOutputRequest struct {
+	ID string
+}
+
+// ActionJobsRefresh asks the UI to re-read the background job list.
+type ActionJobsRefresh struct{}
+
 // ActionSelectModel is a message indicating a model has been selected.
 type ActionSelectModel struct {
 	Provider       catwalk.Provider

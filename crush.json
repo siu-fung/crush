@@ -1,5 +1,18 @@
 {
   "$schema": "https://charm.land/crush.json",
+  "options": {
+    "hook_continuation_limit": 5
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "name": "bash-failure-continue",
+        "matcher": "^bash$",
+        "command": "./hooks/bash-failure-continue.sh",
+        "timeout": 10
+      }
+    ]
+  },
   "lsp": {
     "gopls": {
       "options": {

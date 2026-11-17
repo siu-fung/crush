@@ -49,7 +49,7 @@ func NewJobOutputTool(spillDir string) fantasy.AgentTool {
 				bgShell.WaitContext(ctx)
 			}
 
-			stdout, stderr, done, err := bgShell.GetOutput()
+			stdout, stderr, done, err := bgShell.GetRecentOutput()
 
 			var outputParts []string
 			if stdout != "" {

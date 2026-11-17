@@ -14,4 +14,10 @@ Working directory: {{.WorkingDir}}
 Is directory a git repo: {{if .IsGitRepo}} yes {{else}} no {{end}}
 Platform: {{.Platform}}
 Today's date: {{.Date}}
-</env>
+</env>{{if .CustomPrompt}}
+
+<custom_instructions>
+The user configured the following instructions for every session. Follow them in addition to the rules above.
+{{.CustomPrompt}}
+</custom_instructions>
+{{end}}

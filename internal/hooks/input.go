@@ -116,6 +116,7 @@ func parseStdout(stdout string) (HookResult, bool) {
 		Halt               bool            `json:"halt"`
 		Reason             string          `json:"reason"`
 		Context            json.RawMessage `json:"context"`
+		Continuation       bool            `json:"continuation"`
 		UpdatedInput       json.RawMessage `json:"updated_input"`
 		UpdatedOutput      json.RawMessage `json:"updated_output"`
 		Continue           *bool           `json:"continue"`
@@ -141,6 +142,7 @@ func parseStdout(stdout string) (HookResult, bool) {
 		Context:       parseContext(parsed.Context),
 		UpdatedInput:  rawToString(parsed.UpdatedInput),
 		UpdatedOutput: rawToString(parsed.UpdatedOutput),
+		Continuation:  parsed.Continuation,
 	}
 	if parsed.Continue != nil && !*parsed.Continue {
 		result.Halt = true

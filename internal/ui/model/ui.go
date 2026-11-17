@@ -448,6 +448,10 @@ type UI struct {
 	// in-flight fetch captures it at dispatch and its result is discarded
 	// if the generation has moved on (see workspace_cache.go).
 	promptQueueGen uint64
+	// jobsPollErr is the last failure the background jobs panel reported.
+	// Polling repeats it every second, so it is only surfaced when the
+	// message changes.
+	jobsPollErr string
 	// agentBusyCache / permModeCache memoize the workspace busy and
 	// permission-mode probes (synchronous HTTP round-trips in client/server
 	// mode). Reads never probe; refreshes happen off-thread (see
@@ -932,6 +936,20 @@ func (m *UI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.applyBusyState(msg)...)
 	case promptQueueMsg:
 		cmds = append(cmds, m.applyPromptQueue(msg)...)
+	case queueChangedMsg:
+		cmds = append(cmds, m.applyQueueChanged(msg)...)
+	case timelineLoadedMsg:
+		cmds = append(cmds, m.applyTimelineLoaded(msg)...)
+	case rewoundMsg:
+		cmds = append(cmds, m.applyRewound(msg)...)
+	case jobsLoadedMsg:
+		cmds = append(cmds, m.applyJobsLoaded(msg)...)
+	case jobOutputMsg:
+		cmds = append(cmds, m.applyJobOutput(msg)...)
+	case jobKilledMsg:
+		cmds = append(cmds, m.applyJobKilled(msg)...)
+	case jobsTickMsg:
+		cmds = append(cmds, m.applyJobsTick()...)
 	case lspStatesMsg:
 		if cmd := m.applyLSPStates(msg); cmd != nil {
 			cmds = append(cmds, cmd)
@@ -2340,6 +2358,42 @@ func (m *UI) handleDialogMsg(msg tea.Msg) tea.Cmd {
 		m.dialog.CloseDialog(dialog.SessionsID)
 		cmds = append(cmds, m.loadSession(msg.Session.ID))
 
+	// Timeline dialog messages.
+	case dialog.ActionRewind:
+		if !m.hasSession() {
+			break
+		}
+		if m.isAgentBusy() {
+			// Rewinding while a run is appending messages would race it,
+			// so keep the picker open and ask for patience.
+			cmds = append(cmds, util.ReportWarn("Agent is busy, please wait before rewinding..."))
+			break
+		}
+		m.dialog.CloseDialog(dialog.TimelineID)
+		cmds = append(cmds, m.rewindSessionCmd(msg.MessageID, msg.Prompt))
+
+	// Prompt queue dialog messages.
+	case dialog.ActionRemoveQueuedPrompt:
+		if !m.hasSession() {
+			break
+		}
+		cmds = append(cmds, m.removeQueuedPromptCmd(msg.Index, msg.Prompt))
+	case dialog.ActionClearQueue:
+		if !m.hasSession() {
+			break
+		}
+		cmds = append(cmds, m.clearQueueCmd())
+
+	// Background jobs dialog messages.
+	case dialog.ActionKillJob:
+		cmds = append(cmds, m.killJobCmd(msg.ID))
+	case dialog.ActionJobOutputRequest:
+		cmds = append(cmds, m.refreshJobOutputCmd(msg.ID, true))
+	case dialog.ActionJobsRefresh:
+		if m.jobsDialog() != nil {
+			cmds = append(cmds, m.refreshJobsCmd())
+		}
+
 	// Open dialog message.
 	case dialog.ActionOpenDialog:
 		m.dialog.CloseDialog(dialog.CommandsID)
@@ -3287,6 +3341,27 @@ func (m *UI) handleKeyPressMsg(msg tea.KeyPressMsg) tea.Cmd {
 		case key.Matches(msg, m.keyMap.Chat.TogglePills):
 			if m.state == uiChat && m.hasSession() {
 				if cmd := m.togglePillsExpanded(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Timeline):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.openTimelineCmd(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Queue):
+			if m.state == uiChat && m.hasSession() {
+				if cmd := m.openQueueDialog(); cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				return true
+			}
+		case key.Matches(msg, m.keyMap.Jobs):
+			if m.state == uiChat {
+				if cmd := m.openJobsDialog(); cmd != nil {
 					cmds = append(cmds, cmd)
 				}
 				return true

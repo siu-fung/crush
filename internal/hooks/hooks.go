@@ -16,6 +16,10 @@ import (
 // killed-by-signal range (128+) so it can't be hit by accident.
 const HaltExitCode = 49
 
+// StopInstruction is handed to the model once a turn's continuation
+// budget is spent: the retry loop hooks kept alive has to end.
+const StopInstruction = "Stop retrying, explain what is still failing, and hand back to the user."
+
 // HookMetadata is embedded in tool response metadata so the UI can
 // display a hook indicator.
 type HookMetadata struct {
@@ -71,6 +75,10 @@ type HookResult struct {
 	Context       string
 	UpdatedInput  string // Shallow-merge patch against tool_input (opaque JSON).
 	UpdatedOutput string // Replacement for the tool's output (PostToolUse).
+	// Continuation marks context that exists to keep the model working
+	// in the same turn (e.g. "fix the failing command"). Continuations
+	// are capped per turn so a broken command cannot spin forever.
+	Continuation bool
 }
 
 // AggregateResult holds the combined outcome of all hooks for an event.
@@ -83,6 +91,13 @@ type AggregateResult struct {
 	Context       string     // Concatenated context from all hooks.
 	UpdatedInput  string     // Merged tool_input JSON (empty if no patches).
 	UpdatedOutput string     // Replacement tool output; the last hook to set it wins.
+	// Continuation reports that at least one hook asked to keep the turn
+	// going, and the budget for it was not exhausted.
+	Continuation bool
+	// ContinuationLimitReached reports that this event's continuation was
+	// over budget; Context then holds the stop instruction instead of
+	// what the hooks wanted the model to read.
+	ContinuationLimitReached bool
 }
 
 // Blocked reports whether any hook denied the action or halted the turn.
@@ -98,13 +113,14 @@ func (a AggregateResult) Blocked() bool {
 // replacement, so the last hook to set it wins.
 func aggregate(results []HookResult, origToolInput string) AggregateResult {
 	var (
-		decision Decision
-		halt     bool
-		reasons  []string
-		contexts []string
-		merged   = origToolInput
-		anyPatch = false
-		output   string
+		decision     Decision
+		halt         bool
+		reasons      []string
+		contexts     []string
+		merged       = origToolInput
+		anyPatch     = false
+		output       string
+		continuation bool
 	)
 	for _, r := range results {
 		switch r.Decision {
@@ -131,6 +147,9 @@ func aggregate(results []HookResult, origToolInput string) AggregateResult {
 		if r.Context != "" {
 			contexts = append(contexts, r.Context)
 		}
+		if r.Continuation {
+			continuation = true
+		}
 		if r.UpdatedOutput != "" {
 			output = r.UpdatedOutput
 		}
@@ -154,6 +173,7 @@ func aggregate(results []HookResult, origToolInput string) AggregateResult {
 		Halt:          halt,
 		HookCount:     len(results),
 		UpdatedOutput: output,
+		Continuation:  continuation,
 	}
 	if anyPatch {
 		agg.UpdatedInput = merged

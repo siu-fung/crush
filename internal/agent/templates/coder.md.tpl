@@ -432,4 +432,10 @@ The following is personal content added by the user that they'd like you to foll
 </file>
 {{end}}
 </user_preferences>
+{{end}}{{if .CustomPrompt}}
+
+<custom_instructions>
+The user configured the following instructions for every session. Follow them in addition to the rules above; they take precedence over the style guidance where the two differ.
+{{.CustomPrompt}}
+</custom_instructions>
 {{end}}

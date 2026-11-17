@@ -130,6 +130,7 @@ type Coordinator interface {
 	QueuedPrompts(sessionID string) int
 	QueuedPromptsList(sessionID string) []string
 	ClearQueue(sessionID string)
+	RemoveQueuedPrompt(sessionID string, index int, prompt string) bool
 	AddNote(sessionID, text string)
 	Summarize(context.Context, string) error
 	Model() Model
@@ -1664,6 +1665,10 @@ func (c *coordinator) CancelAll() {
 
 func (c *coordinator) ClearQueue(sessionID string) {
 	c.currentAgent().ClearQueue(sessionID)
+}
+
+func (c *coordinator) RemoveQueuedPrompt(sessionID string, index int, prompt string) bool {
+	return c.currentAgent().RemoveQueuedPrompt(sessionID, index, prompt)
 }
 
 func (c *coordinator) AddNote(sessionID, text string) {

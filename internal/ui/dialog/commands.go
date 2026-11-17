@@ -547,7 +547,7 @@ func (c *Commands) defaultCommands() []*CommandItem {
 		default:
 			label = "Toggle To-Dos"
 		}
-		commands = append(commands, NewCommandItem(c.com.Styles, "toggle_pills", label, "ctrl+t", ActionTogglePills{}))
+		commands = append(commands, NewCommandItem(c.com.Styles, "toggle_pills", label, "ctrl+space", ActionTogglePills{}))
 	}
 
 	// Add a command for selecting notification style via picker dialog.

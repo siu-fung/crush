@@ -19,6 +19,7 @@ import (
 
 	"github.com/charmbracelet/crush/internal/lsp"
 	"github.com/charmbracelet/crush/internal/permission"
+	"github.com/charmbracelet/crush/internal/textenc"
 )
 
 //go:embed write.md
@@ -65,6 +66,12 @@ func NewWriteTool(
 
 			filePath := filepathext.SmartJoin(workingDir, params.FilePath)
 
+			// oldEncoding is what the new content is written back as. New
+			// files are UTF-8; existing files keep the encoding they were
+			// read in, so a GBK or Shift_JIS file stays that way.
+			oldContent := ""
+			oldEncoding := textenc.UTF8
+
 			fileInfo, err := os.Stat(filePath)
 			if err == nil {
 				if fileInfo.IsDir() {
@@ -78,20 +85,16 @@ func NewWriteTool(
 						filePath, modTime.Format(time.RFC3339), lastRead.Format(time.RFC3339))), nil
 				}
 
-				oldContent, readErr := os.ReadFile(filePath)
-				if readErr == nil && string(oldContent) == params.Content {
+				oldBytes, readErr := os.ReadFile(filePath)
+				if readErr != nil {
+					return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to read file: %s", readErr)), nil
+				}
+				oldContent, oldEncoding = textenc.Decode(oldBytes)
+				if oldContent == params.Content {
 					return fantasy.NewTextErrorResponse(fmt.Sprintf("File %s already contains the exact content. No changes made.", filePath)), nil
 				}
 			} else if !os.IsNotExist(err) {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to check file: %s", err)), nil
-			}
-
-			oldContent := ""
-			if fileInfo != nil && !fileInfo.IsDir() {
-				oldBytes, readErr := os.ReadFile(filePath)
-				if readErr == nil {
-					oldContent = string(oldBytes)
-				}
 			}
 
 			diff, additions, removals := diff.GenerateDiff(
@@ -129,7 +132,11 @@ func NewWriteTool(
 				return resp, nil
 			}
 
-			if err = writeFileWithParents(filePath, []byte(params.Content)); err != nil {
+			data, replaced, err := oldEncoding.Encode(params.Content)
+			if err != nil {
+				return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to encode content as %s: %s", oldEncoding.Name(), err)), nil
+			}
+			if err = writeFileWithParents(filePath, data); err != nil {
 				return fantasy.NewTextErrorResponse(fmt.Sprintf("Failed to write file: %s", err)), nil
 			}
 
@@ -159,6 +166,7 @@ func NewWriteTool(
 			notifyLSPs(ctx, lspManager, params.FilePath)
 
 			result := fmt.Sprintf("File successfully written: %s", filePath)
+			result += encodingNote(oldEncoding, replaced)
 			result = fmt.Sprintf("<result>\n%s\n</result>", result)
 			result += getDiagnostics(filePath, lspManager)
 			return fantasy.WithResponseMetadata(
@@ -171,6 +179,20 @@ func NewWriteTool(
 			), nil
 		},
 	)
+}
+
+// encodingNote describes an encoding conversion for the tool response,
+// so the model knows the bytes on disk are not UTF-8. It returns an
+// empty string when nothing was converted.
+func encodingNote(enc textenc.Encoding, replaced int) string {
+	var note string
+	if !enc.IsUTF8() {
+		note += fmt.Sprintf("\nWrote the file as %s to preserve its original encoding.", enc.Name())
+	}
+	if replaced > 0 {
+		note += fmt.Sprintf("\n%d character(s) cannot be represented in %s and were written as '?'.", replaced, enc.Name())
+	}
+	return note
 }
 
 // ensureParentDir creates the parent directories of path. Call it only

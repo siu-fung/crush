@@ -202,6 +202,12 @@ type SessionAgent interface {
 	QueuedPrompts(sessionID string) int
 	QueuedPromptsList(sessionID string) []string
 	ClearQueue(sessionID string)
+	// RemoveQueuedPrompt drops the queued prompt at index, reporting
+	// whether an entry was removed. prompt, when set, is the text the
+	// caller expects at that index, so a queue that moved underneath it
+	// cannot make this remove the wrong entry. The rest of the queue
+	// keeps its order.
+	RemoveQueuedPrompt(sessionID string, index int, prompt string) bool
 	AddNote(sessionID, text string)
 	Summarize(context.Context, string, fantasy.ProviderOptions, func(context.Context, *fantasy.ProviderError) error) error
 	Model() Model
@@ -2306,6 +2312,53 @@ func (a *sessionAgent) ClearQueue(sessionID string) {
 		slog.Debug("Clearing queued prompts", "session_id", sessionID)
 		a.clearQueueAndNotify(sessionID)
 	}
+}
+
+// RemoveQueuedPrompt drops a single queued prompt and leaves the rest of
+// the queue intact. The dropped call is settled like any other discarded
+// queued call, so a caller waiting on its RunID is not left hanging.
+func (a *sessionAgent) RemoveQueuedPrompt(sessionID string, index int, prompt string) bool {
+	dropped, ok := a.takeQueuedPrompt(sessionID, index, prompt)
+	if !ok {
+		return false
+	}
+	a.settleDroppedCalls([]SessionAgentCall{dropped})
+	return true
+}
+
+// takeQueuedPrompt removes one entry from the session's queue under the
+// per-session dispatch lock, so the index cannot point at an entry the
+// step drain is taking at the same time. A non-empty prompt additionally
+// guards against a stale index: if the drain took a head entry since the
+// caller snapshotted the queue, every later position shifted down by one
+// and the position alone would name the wrong entry.
+func (a *sessionAgent) takeQueuedPrompt(sessionID string, index int, prompt string) (SessionAgentCall, bool) {
+	dispatchLock := a.sessionMu(sessionID)
+	dispatchLock.Lock()
+	defer dispatchLock.Unlock()
+
+	queued, ok := a.messageQueue.Get(sessionID)
+	if !ok {
+		return SessionAgentCall{}, false
+	}
+	if prompt != "" && (index < 0 || index >= len(queued) || queued[index].Prompt != prompt) {
+		// The queue moved underneath the caller: find the entry it
+		// meant by its text rather than trusting the position.
+		index = slices.IndexFunc(queued, func(call SessionAgentCall) bool {
+			return call.Prompt == prompt
+		})
+	}
+	if index < 0 || index >= len(queued) {
+		return SessionAgentCall{}, false
+	}
+	dropped := queued[index]
+	remaining := slices.Delete(slices.Clone(queued), index, index+1)
+	if len(remaining) == 0 {
+		a.messageQueue.Del(sessionID)
+	} else {
+		a.messageQueue.Set(sessionID, remaining)
+	}
+	return dropped, true
 }
 
 // AddNote keeps text for the session's next prompt, which the agent reads
